@@ -1,0 +1,387 @@
+stack segment 
+
+.stack segment				  
+
+c db 256 dup(0) 
+
+e db 100 doble(‘a’)			  
+
+a dw 256 dup(0)
+
+b dw 256 dup(0)		  
+
+
+ends 
+
+
+;data  
+
+data segment				  
+
+.data segment				  
+
+;Variables 
+
+Soymuylarga db 0 
+
+cad1 db “programa de $...  prueba “ 
+
+murcielagos20 db 5
+
+
+var1 db hola' 
+
+cad2 db “programa de $...  prueba      
+
+var2 dw 0 
+ 
+tecla db 5  
+
+Vtecla bd 0fh  
+
+7tecla Wd 0  
+
+7tecla dw 0 
+
+Teclamuylarga db 0  
+
+cons1 equ 45 
+
+con2 equa 345 
+
+con2 equ 345 
+
+simbolo db 045H 
+
+tecla dw 045H 
+
+simbin db 001111101b 
+
+sb db 11110000b 
+
+sb2 dw 11110000110011001b 
+
+edad db 15  
+
+mayor db 'ERES MAYOR DE EDAD...','$'  
+
+menor db 'ERES MENOR DE EDAD...','$'  
+
+b1 db 11110000b
+
+b2 db 11150000b
+
+ends 
+
+ 
+
+code segment 
+
+. code  
+
+.code segment 
+
+ej:
+
+begin proc far  
+
+mov ax,@data  
+
+mov ds,ax  
+
+b20: 
+
+mov es,ax  
+
+cmp edad, 18  
+
+jae b20  
+
+mov ah, 09h ;peticion para desplegar  
+
+lea dx, menor ;carga la direccion de la indicacion  
+
+b21: 
+
+int 021h ;llama al dos  
+
+jmp b21 ;salta a la etiqueta b21 para salir  
+
+ 
+
+mov ah,009h ;peticion para desplegar  
+
+lea dx,mayor ;carga la direccion de la indicacion  
+
+int 21h ;llama al dos  
+
+mov ax,04c00h  
+
+int 21h  
+
+begin endp  
+
+ 
+
+ 
+
+code 
+
+mov ah, 1 ;Leer un caracter de la entrada estandar 
+
+int 21h ;Llamada al sistema operativo (DOS) 
+
+mov tecla, al 
+
+mov ah, 2 ;imprime un simbolo a la consola 
+
+mov dl, simbolo ;el caracter a mostrar, en este caso la E 
+
+int 21h ;Llamada al DOS 
+
+ 
+
+inc tecla 
+
+mov ah, 7 ;NO imprime un simbolo a la consola 
+
+mov dl, tecla ;  
+
+int 21h ;Llamada al DOS 
+
+ret 
+
+;ah = 1 guarda caracter en al 
+
+;ah = 2 escribe un caracter en la consola. El ascii del cacacter a imprimir se pone el dl 
+
+;AH = 7 es igual a el ah=2 pero el resultado no se ve en pantalla  
+
+;ah = 9 imprime una cadena en la consola. Considera el caracter $ como fin de cadena. 
+
+;La direccion de la cadena se expresa en  
+
+mov msg[2], 34H 
+
+mov dx, offset msg  
+
+mov ah, 9 
+
+int 21h 
+
+ret 
+
+msg db "hello world $" 
+
+lectura: 
+
+ mov ah,7 
+
+ int 21h 
+
+ mov tecla, al 
+
+ cmp al, 13 
+
+ jz fin: 
+
+cmp tecla, 122 ;si tecla es mayor a 122 entonces ir a fin3 (tecla > 122) 
+
+ja fin3 
+
+cmp tecla,96 ;si tecla no es mayor a 96 ir a fin3 (tecla <= 96) 
+
+jng fin3 
+
+sub tecla, 32 ;si es 'a' hasta 'z' entonces restarle 32 
+
+ 
+
+ 
+
+fin3:  
+
+mov ah,2 
+
+add ax, var1 
+
+mov dl,tecla 
+
+int 21h 
+
+jmp lectura 
+
+fin:
+
+diferente:
+
+etiqueta:
+
+; Ejemplos de uso de instrucciones
+
+; Ejemplo correcto DAS
+mov ah, 'DAS'
+int 21h ; Imprime el carácter correspondiente a 'DAS'
+
+; Ejemplo incorrecto DAS 
+mov ah, 'DAS'
+int 33h ; Esta llamada al sistema operativo no existe, dará error
+
+; Ejemplo correcto PUSHF
+pushf
+; Código que usa el valor de las flags
+popf
+
+; Ejemplo incorrecto PUSHF
+pushf
+int 33h ; Esta llamada al sistema operativo no existe, dará error
+popf
+
+; Ejemplo correcto RET
+call subrutina
+ret
+
+; Ejemplo incorrecto RET
+ret
+int 21h ; Esta instrucción no tiene sentido después de RET
+
+; Ejemplo correcto CLC
+stc
+clc
+; Código que usa el valor de la bandera de acarreo
+
+; Ejemplo incorrecto CLC 
+clc
+int 33h ; Esta llamada al sistema operativo no existe, dará error
+
+; Ejemplo correcto PUSH
+push ax
+; Código que usa el valor de ax
+pop ax
+
+; Ejemplo incorrecto PUSH
+push ax
+int 21h ; Esta instrucción no tiene sentido después de PUSH
+
+; Ejemplo correcto NOT
+mov ax, 0FFFFh
+not ax
+; Código que usa el valor de ax negado
+
+; Ejemplo incorrecto NOT
+not ax
+int 33h ; Esta llamada al sistema operativo no existe, dará error
+
+; Ejemplo correcto DIV
+mov ax, 100
+mov bx, 5
+div bx
+; Código que usa el resultado de la división
+
+; Ejemplo incorrecto DIV
+div bx
+int 21h ; Esta instrucción no tiene sentido después de DIV
+
+; Ejemplo correcto POP
+push ax
+pop ax
+; Código que usa el valor de ax
+
+; Ejemplo incorrecto POP
+pop ax
+int 33h ; Esta llamada al sistema operativo no existe, dará error
+
+; Ejemplo correcto CMP
+mov ax, 10
+cmp ax, 20
+jl menor ; Salta si ax < 20
+
+; Ejemplo incorrecto CMP
+cmp ax, 20
+int 21h ; Esta instrucción no tiene sentido después de CMP
+
+; Ejemplo correcto TEST
+mov ax, 0F0F0h
+test ax, 0F000h
+jnz diferente ; Salta si algún bit de la máscara es 1
+
+; Ejemplo incorrecto TEST
+test ax, 0F000h
+int 33h ; Esta llamada al sistema operativo no existe, dará error
+
+; Ejemplo correcto LEA
+lea dx, cad1
+mov ah, 9
+int 21h ; Imprime la cadena
+
+; Ejemplo incorrecto LEA
+lea dx, cad1
+int 33h ; Esta llamada al sistema operativo no existe, dará error
+
+; Ejemplo correcto OR
+mov ax, 0F0F0h
+or ax, 00F0h
+; Código que usa el resultado de la operación OR
+
+; Ejemplo incorrecto OR
+or ax, 00F0h
+int 21h ; Esta instrucción no tiene sentido después de OR
+
+; Ejemplo correcto JNAE
+cmp ax, bx
+jnae diferente ; Salta si ax >= bx
+
+; Ejemplo incorrecto JNAE
+jnae diferente
+int 33h ; Esta llamada al sistema operativo no existe, dará error
+
+; Ejemplo correcto JNE
+cmp ax, bx
+jne diferente ; Salta si ax != bx
+
+; Ejemplo incorrecto JNE
+jne diferente
+int 21h ; Esta instrucción no tiene sentido después de JNE
+
+; Ejemplo correcto JNLE
+cmp ax, bx
+jnle mayor ; Salta si ax > bx
+
+; Ejemplo incorrecto JNLE
+jnle mayor
+int 33h ; Esta llamada al sistema operativo no existe, dará error
+
+; Ejemplo correcto LOOPE
+mov cx, 10
+etiqueta:
+; Código a ejecutar en el bucle
+loop etiqueta
+
+; Ejemplo incorrecto LOOPE
+mov cx, 10
+etiqueta:
+; Código a ejecutar en el bucle
+loope etiqueta
+int 21h ; Esta instrucción no tiene sentido después de LOOPE
+
+; Ejemplo correcto JA
+cmp ax, bx
+ja mayor ; Salta si ax > bx
+
+; Ejemplo incorrecto JA
+ja mayor
+int 33h ; Esta llamada al sistema operativo no existe, dará error
+
+; Ejemplo correcto JC
+stc
+jc con_acarreo ; Salta si hay acarreo
+
+; Ejemplo incorrecto JC
+jc con_acarreo
+int 21h ; Esta instrucción no tiene sentido después de JC
+
+jnae etiqueta
+
+jc ej
+
+ends 
