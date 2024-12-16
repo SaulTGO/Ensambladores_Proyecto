@@ -4,6 +4,7 @@ import math
 import re
 from Analyzer import AsmAnalyzer
 
+
 class AsmAnalyzerGUI:
     def __init__(self, root):
         self.root = root
@@ -39,8 +40,8 @@ class AsmAnalyzerGUI:
 
         self.verification_results = []
         self.source_code_with_details = []
-        
-        self.setup_gui()    
+
+        self.setup_gui()
 
     def setup_gui(self):
         # Configure root grid
@@ -56,21 +57,25 @@ class AsmAnalyzerGUI:
         main_frame.grid_rowconfigure(1, weight=2)  # Instruction Verification
         main_frame.grid_rowconfigure(2, weight=0)  # File selection
 
-        # Sección de Código Fuente
         source_frame = ttk.LabelFrame(main_frame, text="Código Fuente", padding="10")
         source_frame.grid(row=0, column=0, padx=5, pady=5, sticky=(tk.W, tk.E, tk.N, tk.S))
         source_frame.grid_columnconfigure(0, weight=1)
         source_frame.grid_rowconfigure(0, weight=1)
 
-        self.source_text = tk.Text(source_frame, wrap=tk.NONE, font=('Consolas', 10))
-        self.source_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        self.source_tree = ttk.Treeview(source_frame,
+                                        columns=('Dirección', 'Instrucción', 'Codificación'),
+                                        show='headings')
+        for col in ('Dirección', 'Instrucción', 'Codificación'):
+            self.source_tree.heading(col, text=col)
+            self.source_tree.column(col, width=150, minwidth=100, stretch=tk.YES)
+        self.source_tree.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
 
-        source_scrollbar_y = ttk.Scrollbar(source_frame, orient=tk.VERTICAL, command=self.source_text.yview)
+        source_scrollbar_y = ttk.Scrollbar(source_frame, orient=tk.VERTICAL, command=self.source_tree.yview)
         source_scrollbar_y.grid(row=0, column=1, sticky=(tk.N, tk.S))
-        source_scrollbar_x = ttk.Scrollbar(source_frame, orient=tk.HORIZONTAL, command=self.source_text.xview)
+        source_scrollbar_x = ttk.Scrollbar(source_frame, orient=tk.HORIZONTAL, command=self.source_tree.xview)
         source_scrollbar_x.grid(row=1, column=0, sticky=(tk.W, tk.E))
 
-        self.source_text.configure(yscrollcommand=source_scrollbar_y.set, xscrollcommand=source_scrollbar_x.set)
+        self.source_tree.configure(yscrollcommand=source_scrollbar_y.set, xscrollcommand=source_scrollbar_x.set)
 
         # Sección de Tabla de Símbolos
         symbol_table_frame = ttk.LabelFrame(main_frame, text="Tabla de Símbolos", padding="10")
@@ -138,7 +143,7 @@ class AsmAnalyzerGUI:
         ttk.Button(file_frame, text="Seleccionar Archivo", command=self.load_file).grid(row=0, column=0, padx=5)
         ttk.Label(file_frame, textvariable=self.file_path_var, wraplength=600).grid(row=0, column=1,
                                                                                     sticky=(tk.W, tk.E))
-    
+
         # Add pagination controls for source code
         source_pagination_frame = ttk.Frame(source_frame)
         source_pagination_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
@@ -159,13 +164,13 @@ class AsmAnalyzerGUI:
         if file_path:
             self.file_path_var.set(file_path)
             self.analyzer.parse_file(file_path)
-            
+
             # Reset source code pagination when loading a new file
             self.current_page['source'] = 1
-            
+
             # Store source code with details
             self.source_code_with_details = self.analyzer.get_source_with_details()
-            
+
             self.update_all_displays()
 
     def update_all_displays(self):
@@ -178,11 +183,13 @@ class AsmAnalyzerGUI:
         self.update_instruction_verification()
 
     def update_source_code(self):
-        self.source_text.delete('1.0', tk.END)
+        # Clear existing entries
+        for item in self.source_tree.get_children():
+            self.source_tree.delete(item)
 
         # Calculate total pages
         total_pages = math.ceil(len(self.source_code_with_details) / self.lines_per_page)
-        
+
         # Ensure current page is within bounds
         current_page = min(self.current_page['source'], total_pages)
         self.current_page['source'] = current_page
@@ -191,35 +198,16 @@ class AsmAnalyzerGUI:
         start_idx = (current_page - 1) * self.lines_per_page
         end_idx = start_idx + self.lines_per_page
 
-        # Define column widths
-        address_width = 15
-        source_width = 45
-        machine_code_width = 20
-
-        # Create table header
-        header = f"{'CP':<{address_width}}| {'Instrucción':<{source_width}}| {'Codificacion':<{machine_code_width}}"
-        separator = '-' * len(header)
-
-        self.source_text.insert(tk.END, header + '\n')
-        self.source_text.insert(tk.END, separator + '\n')
-
         # Insert paginated source code
         page_source_code = self.source_code_with_details[start_idx:end_idx]
         for line in page_source_code:
-            # Split the line into its components
             parts = line.split(' | ')
             if len(parts) == 3:
                 address, instruction, machine_code = parts
-                formatted_line = f"{address:<{address_width}}| {instruction:<{source_width}}| {machine_code:<{machine_code_width}}"
+                self.source_tree.insert('', 'end', values=(address, instruction, machine_code))
             else:
                 # Fallback for any unexpected line format
-                formatted_line = f"{'----':<{address_width}}| {line:<{source_width}}| {'Sin procesamiento':<{machine_code_width}}"
-
-            self.source_text.insert(tk.END, formatted_line + '\n')
-
-        # Optional: Add some styling to make the header stand out
-        self.source_text.tag_configure('header', foreground='blue', font=('Consolas', 10, 'bold'))
-        self.source_text.tag_add('header', '1.0', '3.0')
+                self.source_tree.insert('', 'end', values=('----', line, 'Sin procesamiento'))
 
         # Update page label
         self.source_page_label.config(text=f"Página {current_page}/{total_pages}")
@@ -289,7 +277,7 @@ class AsmAnalyzerGUI:
         if self.current_page[section_key] > 1:
             # Retroceder una página
             self.current_page[section_key] -= 1
-            
+
             # Call appropriate update method
             if section_key == 'source':
                 self.update_source_code()
@@ -309,12 +297,13 @@ class AsmAnalyzerGUI:
         if self.current_page[section_key] < total_pages:
             # Avanzar una página
             self.current_page[section_key] += 1
-            
+
             # Call appropriate update method
             if section_key == 'source':
                 self.update_source_code()
             elif section_key == 'instruction_verification':
                 self.update_instruction_verification()
+
 
 def main():
     root = tk.Tk()
