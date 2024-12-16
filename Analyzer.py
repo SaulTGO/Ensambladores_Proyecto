@@ -332,7 +332,7 @@ class AsmAnalyzer:
                     self.machine_code_map[line] = {
                         'address': f'{self.code_address_counter:04X}h',
                         'machine_code_binary': f"Invalid instruction: {instruction}",
-                        'machine_code_hex': 'Sin Procesamiento',
+                        'machine_code_hex': 'Error',
                         'addressing_mode': 'NONE'
                     }
                 self.code_address_counter += 2
@@ -358,17 +358,17 @@ class AsmAnalyzer:
             if '.CODE' in line.upper():
                 current_segment = 'code'
                 current_code_address = 0x0250
-                source_details.append(f"0250h | {line} | {'Definición de Segmento de Código'}")
+                source_details.append(f"0250h | {line} | {'Correcto'}")
                 continue
             elif '.DATA' in line.upper():
                 current_segment = 'data'
                 current_data_address = 0x0250
-                source_details.append(f"0250h | {line} | {'Definición de Segmento de Datos'}")
+                source_details.append(f"0250h | {line} | {'Correcto'}")
                 continue
             elif '.STACK' in line.upper():
                 current_segment = 'stack'
                 current_stack_address = 0x0250
-                source_details.append(f"0250h | {line} | {'Definición de Segmento de Pila'}")
+                source_details.append(f"0250h | {line} | {'Correcto'}")
                 continue
 
             # Process line based on current segment
@@ -408,13 +408,13 @@ class AsmAnalyzer:
 
                         # Add detailed information
                         source_details.append(
-                            f"{current_data_address:04X}h | {line} | Incremento en el segmento de datos"
+                            f"{current_data_address:04X}h | {line} | Correcto"
                         )
 
                         # Update data address
                         current_data_address += total_size
                     else:
-                        source_details.append(f"{current_data_address:04X}h | {line} | {'Sin procesamiento'}")
+                        source_details.append(f"{current_data_address:04X}h | {line} | {'Correcto'}")
 
                 elif current_segment == 'stack':
                     # Stack segment processing (same as before)
@@ -445,13 +445,13 @@ class AsmAnalyzer:
 
                         # Add detailed information
                         source_details.append(
-                            f"{current_stack_address:04X}h | {line} | Incremento en la pila"
+                            f"{current_stack_address:04X}h | {line} | Correcto"
                         )
 
                         # Update stack address
                         current_stack_address += total_size
                     else:
-                        source_details.append(f"{current_stack_address:04X}h | {line} | {'Sin procesamiento'}")
+                        source_details.append(f"{current_stack_address:04X}h | {line} | {'Error'}")
                 
                 elif current_segment == 'code':
                     # Code segment processing (remains the same as before)
@@ -466,11 +466,11 @@ class AsmAnalyzer:
                         if line in self.machine_code_map:
                             details = self.machine_code_map[line]
                             source_details.append(f"{current_code_address:04X}h | {line} | {details['machine_code_hex']}")
-                            # Increment code address by 2 only if not marked as "Sin procesamiento"
-                            if details['machine_code_hex'] != 'Sin Procesamiento':
+                            # Increment code address by 2 only if not marked as "Error"
+                            if details['machine_code_hex'] != 'Error':
                                 current_code_address += 2
                         else:
-                            source_details.append(f"{current_code_address:04X}h | {line} | {'Sin procesamiento'}")
+                            source_details.append(f"{current_code_address:04X}h | {line} | {'Error'}")
             
             # Lines not in symbol table
             else:
@@ -478,15 +478,15 @@ class AsmAnalyzer:
                     if line in self.machine_code_map:
                         details = self.machine_code_map[line]
                         source_details.append(f"{current_code_address:04X}h | {line} | {details['machine_code_hex']}")
-                        # Increment code address by 2 only if not marked as "Sin procesamiento"
-                        if details['machine_code_hex'] != 'Sin Procesamiento':
+                        # Increment code address by 2 only if not marked as "Error"
+                        if details['machine_code_hex'] != 'Error':
                             current_code_address += 2
                     else:
-                        source_details.append(f"{current_code_address:04X}h | {line} | {'Sin procesamiento'}")
+                        source_details.append(f"{current_code_address:04X}h | {line} | {'Error'}")
                 elif current_segment == 'data':
-                    source_details.append(f"{current_data_address:04X}h | {line} | {'Sin procesamiento'}")
+                    source_details.append(f"{current_data_address:04X}h | {line} | {'Error'}")
                 elif current_segment == 'stack':
-                    source_details.append(f"{current_stack_address:04X}h | {line} | {'Sin procesamiento'}")
+                    source_details.append(f"{current_stack_address:04X}h | {line} | {'Error'}")
 
         return source_details
     
@@ -598,8 +598,8 @@ class AsmAnalyzer:
                 # Verificar si la línea está en el mapa de código de máquina
                 if line in self.machine_code_map:
                     details = self.machine_code_map[line]
-                    # Incrementar por 2 solo si no es "Sin procesamiento"
-                    if details['machine_code_hex'] != 'Sin Procesamiento':
+                    # Incrementar por 2 solo si no es "Error"
+                    if details['machine_code_hex'] != 'Error':
                         current_code_address += 2
                 else:
                     current_code_address += 2
