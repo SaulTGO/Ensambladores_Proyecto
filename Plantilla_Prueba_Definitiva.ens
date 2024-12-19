@@ -2,13 +2,13 @@ stack segment
 
 .stack segment				  
 
-c db 256 dup(0) 
+db 256 dup(0) 
 
-e db 100 doble(‘a’)			  
+db 100 doble(‘a’)			  
 
-a dw 256 dup(0)
+dw 256 dup(0)
 
-b dw 256 dup(0)		  
+dw 256 dup(0)		  
 
 
 ends 
