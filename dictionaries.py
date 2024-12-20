@@ -149,3 +149,6 @@ class Dictionary:
             r'^[01]+[Bb]$': 'Constante Numérica Binaria',
             r"^'.'$|^'[^']*'$": 'Constante Caracter'
         }
+
+        self.tags_addresses = {}
+        self.vars_addresses = {}

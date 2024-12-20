@@ -15,6 +15,7 @@ class AsmAnalyzer:
         self.data_address_counter = 0x0250  # Initial address for data segment
         self.code_address_counter = 0x0250  # Initial address for code segment
         self.machine_code_map = {}
+        self.variables_dict = {}
 
         #Set dictionaries from dictionaries.py
         dicc = Dictionary()
@@ -187,22 +188,26 @@ class AsmAnalyzer:
                 self.data_address_counter += size_map[directive]
 
     def generate_machine_code(self):
-        # Reset code address counter
+        # Reset code address counter and maps
         self.code_address_counter = 0x0250
         self.machine_code_map = {}
+        label_addresses = {}  # Dictionary to store label addresses
+
+        # Generate variables dictionary at the start
+        self.generate_variables_dict()
 
         # Expanded addressing mode dictionary
         addressing_modes = {
-            '00': 'DIRECT/MEMORY',    # Direct addressing or memory operand
-            '01': 'IMMEDIATE',        # Immediate data
-            '10': 'INDIRECT',         # Indirect addressing
-            '11': 'REGISTER'          # Register-to-register
+            '00': 'DIRECT/MEMORY',  # Direct addressing or memory operand
+            '01': 'IMMEDIATE',  # Immediate data
+            '10': 'INDIRECT',  # Indirect addressing
+            '11': 'REGISTER'  # Register-to-register
         }
 
         # Comprehensive register encoding for 16-bit and 8-bit registers
         register_encoding = {
             '16BIT': {
-                'AX': '000', 'CX': '001', 'DX': '010', 'BX': '011', 
+                'AX': '000', 'CX': '001', 'DX': '010', 'BX': '011',
                 'SP': '100', 'BP': '101', 'SI': '110', 'DI': '111'
             },
             '8BIT': {
@@ -211,135 +216,215 @@ class AsmAnalyzer:
             }
         }
 
+        def process_operand(operand):
+            """Processes an operand and determines if it's a register, variable or immediate value"""
+            operand = operand.upper()
+            if operand in register_encoding['16BIT'] or operand in register_encoding['8BIT']:
+                return 'register', operand
+            elif operand in self.variables_dict:
+                return 'variable', operand
+            elif any(pattern.match(operand) for pattern in [
+                re.compile(r'^[0-9A-Fa-f]+[Hh]$'),
+                re.compile(r'^\d+$'),
+                re.compile(r'^[01]+[Bb]$')
+            ]):
+                return 'immediate', operand
+            return 'unknown', operand
+
+        def encode_cmp_with_variable(reg, var_name):
+            """Generates machine code for CMP with variable"""
+            if var_name in self.variables_dict:
+                var_info = self.variables_dict[var_name]
+                is_word = var_info['tipo'].startswith('DW')
+
+                # Base format for CMP with memory
+                machine_code = '001110'  # Base opcode for CMP
+                machine_code += '1'  # Direction (reg to memory)
+                machine_code += '1' if is_word else '0'  # Word/Byte
+                machine_code += '00'  # Direct mode
+                machine_code += register_encoding['16BIT'][reg] if is_word else register_encoding['8BIT'][reg]
+                machine_code += '110'  # Direct memory mode
+
+                # Add variable address (16 bits)
+                var_addr = int(var_info['dirección'].rstrip('h'), 16)
+                addr_binary = format(var_addr, '016b')
+                machine_code += addr_binary
+
+                return machine_code
+            return None
+
         def group_and_convert_to_hex(binary_str):
             """Group binary string into groups of 4 bits and convert to hex."""
             # Pad the binary string to ensure it's divisible by 4
             binary_str = binary_str.zfill((len(binary_str) + 3) // 4 * 4)
-            
+
             # Group into 4-bit chunks
-            groups = [binary_str[i:i+4] for i in range(0, len(binary_str), 4)]
-            
+            groups = [binary_str[i:i + 4] for i in range(0, len(binary_str), 4)]
+
             # Convert each 4-bit group to hex
             hex_groups = [hex(int(group, 2))[2:].upper() for group in groups]
-            
+
             return ' '.join(hex_groups)
 
+        # First pass: collect label addresses
+        current_address = self.code_address_counter
         for line in self.code_section:
             parts = line.split()
-            if parts:
-                instruction = parts[0].upper()
+            if parts and parts[0].endswith(':'):
+                label = parts[0].rstrip(':')
+                label_addresses[label] = current_address
+            if not line.strip().endswith(':'):  # Only increment for non-label lines
+                current_address += 2  # Assuming all instructions are 2 bytes
 
-                # Verificar instrucciones válidas
-                if instruction in self.valid_instructions:
-                    try:
-                        machine_code_binary = ''
-                        addressing_mode = ''
+        # Second pass: generate machine code
+        for line in self.code_section:
+            parts = line.split()
+            if not parts:
+                continue
 
-                        # Enhanced machine code generation
-                        if instruction in ['PUSH', 'POP']:
-                            if len(parts) > 1:
-                                reg = parts[1].upper()
-                                if reg in register_encoding['16BIT']:
-                                    # Detailed opcode: Push/Pop with register
-                                    machine_code_binary = (
-                                        ('01010' if instruction == 'PUSH' else '01011') +  # Base opcode
-                                        register_encoding['16BIT'][reg]  # Register bits
-                                    )
-                                    addressing_mode = addressing_modes['11']  # Register mode
+            instruction = parts[0].upper()
+            if instruction.endswith(':'):  # Skip label definitions
+                continue
+
+            try:
+                machine_code_binary = ''
+                addressing_mode = ''
+
+                # Handle jump instructions
+                if instruction in ['JMP', 'JE', 'JNE', 'JL', 'JLE', 'JG', 'JGE', 'JA', 'JC']:
+                    if len(parts) > 1:
+                        target_label = parts[1].upper()
+                        if target_label in label_addresses:
+                            # Get base opcode for jump instruction
+                            base_opcode = self.machine_code_reference.get(instruction)
+                            if base_opcode:
+                                target_address = label_addresses[target_label]
+                                # Calculate relative offset (target - current - 2)
+                                offset = target_address - (self.code_address_counter + 2)
+                                # Convert offset to 8-bit signed value
+                                if -128 <= offset <= 127:
+                                    offset_binary = format(offset & 0xFF, '08b')
+                                    machine_code_binary = base_opcode + offset_binary
+                                    addressing_mode = addressing_modes['00']
                                 else:
-                                    machine_code_binary = f"Error: Invalid register {reg}"
+                                    machine_code_binary = f"Error: Jump offset too large"
                             else:
-                                machine_code_binary = f"Error: Missing register for {instruction}"
-                        
-                        elif instruction == 'CMP':
-                            if len(parts) == 3:
-                                src_reg, dest_reg = parts[1].upper(), parts[2].upper()
-                                if (src_reg in register_encoding['16BIT'] and 
-                                    dest_reg in register_encoding['16BIT']):
-                                    # Detailed CMP instruction
-                                    machine_code_binary = (
-                                        '001110' +    # CMP opcode
-                                        '1' +         # Direction bit (dest <- src)
-                                        '1' +         # Word operation
-                                        '11' +        # Register-to-register mode
-                                        register_encoding['16BIT'][dest_reg] +  # Dest register
-                                        register_encoding['16BIT'][src_reg]     # Src register
-                                    )
-                                    addressing_mode = addressing_modes['11']
-                                else:
-                                    machine_code_binary = f"Error: Invalid registers"
-                            else:
-                                machine_code_binary = f"Error: Incorrect CMP arguments"
-                        
-                        elif instruction == 'MOV':
-                            if len(parts) == 3:
-                                src, dest = parts[1].upper(), parts[2].upper()
-                                
-                                # Register-to-register MOV (16-bit)
-                                if src in register_encoding['16BIT'] and dest in register_encoding['16BIT']:
-                                    machine_code_binary = (
-                                        '1000100' +   # MOV opcode
-                                        '1' +         # Word operation
-                                        '11' +        # Register-to-register mode
-                                        register_encoding['16BIT'][dest] +  # Dest register
-                                        register_encoding['16BIT'][src]     # Src register
-                                    )
-                                    addressing_mode = addressing_modes['11']
-                                
-                                # Register-to-register MOV (8-bit)
-                                elif src in register_encoding['8BIT'] and dest in register_encoding['8BIT']:
-                                    machine_code_binary = (
-                                        '1000100' +   # MOV opcode
-                                        '0' +         # Byte operation
-                                        '11' +        # Register-to-register mode
-                                        register_encoding['8BIT'][dest] +  # Dest register
-                                        register_encoding['8BIT'][src]     # Src register
-                                    )
-                                    addressing_mode = addressing_modes['11']
-                                else:
-                                    machine_code_binary = f"Error: Invalid registers"
-                            else:
-                                machine_code_binary = f"Error: Incorrect MOV arguments"
-                        
+                                machine_code_binary = f"Error: Unknown jump instruction"
                         else:
-                            # Default machine code from reference
-                            machine_code_binary = self.machine_code_reference.get(instruction, f"Not implemented: {instruction}")
-                            addressing_mode = 'UNDEFINED'
+                            machine_code_binary = f"Error: Undefined label {target_label}"
+                    else:
+                        machine_code_binary = f"Error: Missing target for jump instruction"
 
-                        # Convert binary to grouped hex
-                        machine_code_hex = group_and_convert_to_hex(machine_code_binary)
+                # Handle PUSH/POP
+                elif instruction in ['PUSH', 'POP']:
+                    if len(parts) > 1:
+                        reg = parts[1].upper()
+                        if reg in register_encoding['16BIT']:
+                            machine_code_binary = (
+                                    ('01010' if instruction == 'PUSH' else '01011') +
+                                    register_encoding['16BIT'][reg]
+                            )
+                            addressing_mode = addressing_modes['11']
+                        else:
+                            machine_code_binary = f"Error: Invalid register {reg}"
+                    else:
+                        machine_code_binary = f"Error: Missing register for {instruction}"
 
-                        # Store machine code with address and details
-                        self.machine_code_map[line] = {
-                            'address': f'{self.code_address_counter:04X}h',
-                            'machine_code_binary': machine_code_binary,
-                            'machine_code_hex': machine_code_hex,
-                            'addressing_mode': addressing_mode
-                        }
+                # Handle CMP
+                elif instruction == 'CMP' and len(parts) == 3:
+                    op1, op2 = parts[1].upper(), parts[2].upper()
+                    op1_type, op1_val = process_operand(op1)
+                    op2_type, op2_val = process_operand(op2)
 
-                        # Increment address (2 bytes per instruction)
-                        self.code_address_counter += 2
+                    if op1_type == 'register' and op2_type == 'variable':
+                        machine_code_binary = encode_cmp_with_variable(op1_val, op2_val)
+                        if machine_code_binary:
+                            addressing_mode = addressing_modes['00']  # Direct mode
+                        else:
+                            machine_code_binary = "Error: Invalid variable reference"
+                    elif op1_type == 'register' and op2_type == 'register':
+                        if (op1_val in register_encoding['16BIT'] and
+                                op2_val in register_encoding['16BIT']):
+                            machine_code_binary = (
+                                    '001110' +  # CMP opcode
+                                    '1' +  # Direction bit (dest <- src)
+                                    '1' +  # Word operation
+                                    '11' +  # Register-to-register mode
+                                    register_encoding['16BIT'][op2_val] +  # Dest register
+                                    register_encoding['16BIT'][op1_val]  # Src register
+                            )
+                            addressing_mode = addressing_modes['11']
+                        else:
+                            machine_code_binary = f"Error: Invalid registers"
+                    else:
+                        machine_code_binary = f"Error: Invalid operand types for CMP"
 
-                    except Exception as e:
-                        self.machine_code_map[line] = {
-                            'address': f'{self.code_address_counter:04X}h',
-                            'machine_code_binary': f"Encoding error: {str(e)}",
-                            'machine_code_hex': 'Error',
-                            'addressing_mode': 'ERROR'
-                        }
-                        self.code_address_counter += 2
+                # Handle MOV
+                elif instruction == 'MOV':
+                    if len(parts) == 3:
+                        src, dest = parts[1].upper(), parts[2].upper()
+
+                        # Register-to-register MOV (16-bit)
+                        if src in register_encoding['16BIT'] and dest in register_encoding['16BIT']:
+                            machine_code_binary = (
+                                    '1000100' +  # MOV opcode
+                                    '1' +  # Word operation
+                                    '11' +  # Register-to-register mode
+                                    register_encoding['16BIT'][dest] +  # Dest register
+                                    register_encoding['16BIT'][src]  # Src register
+                            )
+                            addressing_mode = addressing_modes['11']
+
+                        # Register-to-register MOV (8-bit)
+                        elif src in register_encoding['8BIT'] and dest in register_encoding['8BIT']:
+                            machine_code_binary = (
+                                    '1000100' +  # MOV opcode
+                                    '0' +  # Byte operation
+                                    '11' +  # Register-to-register mode
+                                    register_encoding['8BIT'][dest] +  # Dest register
+                                    register_encoding['8BIT'][src]  # Src register
+                            )
+                            addressing_mode = addressing_modes['11']
+                        else:
+                            machine_code_binary = f"Error: Invalid registers"
+                    else:
+                        machine_code_binary = f"Error: Incorrect MOV arguments"
+
                 else:
-                    self.machine_code_map[line] = {
-                        'address': f'{self.code_address_counter:04X}h',
-                        'machine_code_binary': f"Invalid instruction: {instruction}",
-                        'machine_code_hex': 'Error',
-                        'addressing_mode': 'NONE'
-                    }
-                self.code_address_counter += 2
+                    # Default machine code from reference
+                    machine_code_binary = self.machine_code_reference.get(instruction,
+                                                                          f"Not implemented: {instruction}")
+                    addressing_mode = 'UNDEFINED'
+
+                # Convert binary to grouped hex
+                machine_code_hex = group_and_convert_to_hex(machine_code_binary) if not machine_code_binary.startswith(
+                    'Error') else 'Error'
+
+                # Store machine code with address and details
+                self.machine_code_map[line] = {
+                    'address': f'{self.code_address_counter:04X}h',
+                    'machine_code_binary': machine_code_binary,
+                    'machine_code_hex': machine_code_hex,
+                    'addressing_mode': addressing_mode
+                }
+
+                # Increment address (2 bytes per instruction)
+                if not line.strip().endswith(':'):  # Only increment for non-label lines
+                    self.code_address_counter += 2
+
+            except Exception as e:
+                self.machine_code_map[line] = {
+                    'address': f'{self.code_address_counter:04X}h',
+                    'machine_code_binary': f"Encoding error: {str(e)}",
+                    'machine_code_hex': 'Error',
+                    'addressing_mode': 'ERROR'
+                }
+                if not line.strip().endswith(':'):
+                    self.code_address_counter += 2
 
     def get_source_with_details(self):
         source_details = []
-        
+
         # Regenerate symbol table to ensure updated information
         self.generate_symbol_table()
 
@@ -374,11 +459,11 @@ class AsmAnalyzer:
             # Process line based on current segment
             parts = clean_line.split()
             first_part = parts[0].rstrip(':')
-            
+
             # Check symbol table for symbol information
             if first_part in self.symbol_table:
                 symbol_info = self.symbol_table[first_part]
-                
+
                 if current_segment == 'data':
                     # Data segment processing
                     if symbol_info.get('tipo', '').startswith(('DB', 'DW', 'DD')):
@@ -416,62 +501,24 @@ class AsmAnalyzer:
                     else:
                         source_details.append(f"{current_data_address:04X}h | {line} | {'Correcto'}")
 
-                elif current_segment == 'stack':
-                    # Stack segment processing (same as before)
-                    if symbol_info.get('tipo', '').startswith(('DB', 'DW', 'DD')):
-                        size_multiplier = 1
-                        size_per_element = 1  # Default to byte
-
-                        # Check for DUP directive
-                        if 'DUP' in clean_line.upper():
-                            dup_match = re.search(r'(\d+)\s*DUP', clean_line.upper())
-                            if dup_match:
-                                size_multiplier = int(dup_match.group(1))
-
-                        # Check for DOBLE directive
-                        elif 'DOBLE' in clean_line.upper():
-                            doble_match = re.search(r'(\d+)\s*DOBLE', clean_line.upper())
-                            if doble_match:
-                                size_multiplier = int(doble_match.group(1)) * 2
-
-                        # Determine element size
-                        if symbol_info['tipo'].startswith('DW'):
-                            size_per_element = 2  # Word (16 bits)
-                        elif symbol_info['tipo'].startswith('DD'):
-                            size_per_element = 4  # Double word (32 bits)
-
-                        # Calculate total size
-                        total_size = size_multiplier * size_per_element
-
-                        # Add detailed information
-                        source_details.append(
-                            f"{current_stack_address:04X}h | {line} | Correcto"
-                        )
-
-                        # Update stack address
-                        current_stack_address += total_size
-                    else:
-                        source_details.append(f"{current_stack_address:04X}h | {line} | {'Error'}")
-                
                 elif current_segment == 'code':
-                    # Code segment processing (remains the same as before)
+                    # Cambio principal: Si es una etiqueta (tipo 'etq'), mostrar "Correcto"
                     if symbol_info.get('tipo') == 'etq':
-                        # Update label's address to current code address
-                        symbol_info['dirección'] = f'{current_code_address:04X}h'
                         source_details.append(
-                            f"{current_code_address:04X}h | {line} | {symbol_info['tipo']}"
+                            f"{current_code_address:04X}h | {line} | {'Correcto'}"
                         )
                     else:
-                        # If line is in machine code map
+                        # Si la línea está en el mapa de código de máquina
                         if line in self.machine_code_map:
                             details = self.machine_code_map[line]
-                            source_details.append(f"{current_code_address:04X}h | {line} | {details['machine_code_hex']}")
-                            # Increment code address by 2 only if not marked as "Error"
+                            source_details.append(
+                                f"{current_code_address:04X}h | {line} | {details['machine_code_hex']}")
+                            # Solo incrementar si no hay error
                             if details['machine_code_hex'] != 'Error':
                                 current_code_address += 2
                         else:
                             source_details.append(f"{current_code_address:04X}h | {line} | {'Error'}")
-            
+
             # Lines not in symbol table
             else:
                 if current_segment == 'code':
@@ -489,7 +536,7 @@ class AsmAnalyzer:
                     source_details.append(f"{current_stack_address:04X}h | {line} | {'Error'}")
 
         return source_details
-    
+
     def is_valid_segment_instruction(self, line):
         # Normalize the line by stripping whitespace and converting to lowercase
         line_stripped = line.strip().lower()
@@ -776,7 +823,21 @@ class AsmAnalyzer:
                 }
 
         return self.symbol_table
-    
+
+    def generate_variables_dict(self):
+        self.variables_dict = {}
+
+        for symbol, info in self.symbol_table.items():
+            # Solo incluir variables (no etiquetas)
+            if info['tipo'].startswith(('DB', 'DW', 'DD')):
+                self.variables_dict[symbol] = {
+                    'dirección': info['dirección'],
+                    'tipo': info['tipo'],
+                    'tamaño': info['tamaño']
+                }
+
+        return self.variables_dict
+
     def verify_instructions(self):
         verification_results = []
 
@@ -839,6 +900,18 @@ class AsmAnalyzer:
             if arg_count != expected_args[mnemonic]:
                 return f"Número incorrecto de argumentos para {mnemonic}. " \
                        f"Esperados: {expected_args[mnemonic]}, Recibidos: {arg_count}"
+
+        if mnemonic in ['JMP', 'JE', 'JNE', 'JL', 'JLE', 'JG', 'JGE']:
+            if len(parts) > 1:
+                target_label = parts[1].upper()
+                # Check if label exists in symbol table
+                if target_label not in self.symbol_table:
+                    return f"Error: Jump to undefined label '{target_label}'"
+                # Check if target label is defined after this instruction
+                label_addr = int(self.symbol_table[target_label]['dirección'].rstrip('h'), 16)
+                current_addr = self.code_address_counter
+                if label_addr <= current_addr:
+                    return f"Error: Forward reference to label '{target_label}'"
 
         return "Correcta"
 
