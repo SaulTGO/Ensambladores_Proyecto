@@ -502,7 +502,7 @@ class AsmAnalyzer:
                         source_details.append(f"{current_data_address:04X}h | {line} | {'Correcto'}")
 
                 elif current_segment == 'code':
-                    # Cambio principal: Si es una etiqueta (tipo 'etq'), mostrar "Correcto"
+                    # Si es una etiqueta (tipo 'etq'), mostrar "Correcto"
                     if symbol_info.get('tipo') == 'etq':
                         source_details.append(
                             f"{current_code_address:04X}h | {line} | {'Correcto'}"
@@ -533,7 +533,21 @@ class AsmAnalyzer:
                 elif current_segment == 'data':
                     source_details.append(f"{current_data_address:04X}h | {line} | {'Error'}")
                 elif current_segment == 'stack':
-                    source_details.append(f"{current_stack_address:04X}h | {line} | {'Error'}")
+                    # Nueva lógica para el segmento stack
+                    clean_line_lower = clean_line.lower().strip()
+                    if clean_line_lower.startswith('dw'):
+                        # Verificar si tiene el patrón "dw X DUP(0)"
+                        dup_match = re.search(r'dw\s+(\d+)\s+dup\s*\(\s*0\s*\)', clean_line_lower)
+                        if dup_match:
+                            # Obtener el número X y multiplicar por 2 (tamaño de word)
+                            multiplier = int(dup_match.group(1))
+                            increment = multiplier * 2
+                            source_details.append(f"{current_stack_address:04X}h | {line} | {'Correcto'}")
+                            current_stack_address += increment
+                        else:
+                            source_details.append(f"{current_stack_address:04X}h | {line} | {'Error'}")
+                    else:
+                        source_details.append(f"{current_stack_address:04X}h | {line} | {'Error'}")
 
         return source_details
 
