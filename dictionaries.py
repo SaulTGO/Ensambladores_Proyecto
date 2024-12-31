@@ -1,4 +1,3 @@
-
 class Dictionary:
     def __init__(self) -> None:
         self.data_dict = {
@@ -40,7 +39,7 @@ class Dictionary:
                 '0': 'Ninguno',
                 '1': 'Ninguno'
             }
-            }
+        }
 
         self.valid_instructions = {
             'DAA', 'PUSHF', 'RET', 'CLC', 'CLD', 'PUSH', 'NOT', 'DIV',

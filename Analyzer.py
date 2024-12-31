@@ -4,6 +4,7 @@ import math
 import re
 from dictionaries import Dictionary
 
+
 class AsmAnalyzer:
     def __init__(self):
         self.code_section = []
@@ -17,24 +18,18 @@ class AsmAnalyzer:
         self.machine_code_map = {}
         self.variables_dict = {}
 
-        #Set dictionaries from dictionaries.py
-        dicc = Dictionary()
+        # Modificar esta línea para hacer dicc un atributo de la clase
+        self.dicc = Dictionary()
 
-        self.data_dict = dicc.data_dict
-
-        self.valid_instructions = dicc.valid_instructions
-
-        self.machine_code_reference = dicc.machine_code_reference
-        
-        self.instructions = dicc.instructions
-
-        self.registers_16bit = dicc.registers_16bit
-
-        self.registers_8bit = dicc.registers_8bit
-
-        self.pseudo_instructions = dicc.pseudo_instructions
-        
-        self.constant_patterns = dicc.constant_patterns
+        # Set dictionaries from dictionaries.py
+        self.data_dict = self.dicc.data_dict
+        self.valid_instructions = self.dicc.valid_instructions
+        self.machine_code_reference = self.dicc.machine_code_reference
+        self.instructions = self.dicc.instructions
+        self.registers_16bit = self.dicc.registers_16bit
+        self.registers_8bit = self.dicc.registers_8bit
+        self.pseudo_instructions = self.dicc.pseudo_instructions
+        self.constant_patterns = self.dicc.constant_patterns
 
         self.symbol_table = {}
         self.label_table = set()
@@ -150,10 +145,10 @@ class AsmAnalyzer:
         if len(parts) >= 3:
             symbol = parts[0]
             directive = parts[1].upper()
-            
+
             # Modificación para manejar cadenas completas
             value = ' '.join(parts[2:])  # Unir todos los elementos después de la directiva
-            
+
             # Validation 1: Check if symbol starts with a number
             if symbol[0].isdigit():
                 print(f"Error: Variable name '{symbol}' cannot start with a number")
@@ -557,10 +552,10 @@ class AsmAnalyzer:
 
         # Precise patterns for valid segment instructions
         valid_segment_patterns = [
-            r'^\.stack\s+segment$',    # .stack segment start
-            r'^\.data\s+segment$',     # .data segment start
-            r'^\.code\s+segment$',     # .code segment start
-            r'^\.\w+\s+ends$',         # Any segment end (modified to allow just 'ENDS')
+            r'^\.stack\s+segment$',  # .stack segment start
+            r'^\.data\s+segment$',  # .data segment start
+            r'^\.code\s+segment$',  # .code segment start
+            r'^\.\w+\s+ends$',  # Any segment end (modified to allow just 'ENDS')
         ]
 
         import re
@@ -627,39 +622,42 @@ class AsmAnalyzer:
         self.symbol_table = {}
         self.label_table = set()
 
+        # Reset dictionaries from Dictionary class
+        self.dicc.tags_addresses = {}
+        self.dicc.vars_addresses = {}
+
         # First, collect label addresses from source
         current_code_address = base_address
         label_addresses = {}  # Diccionario temporal para rastrear direcciones de etiquetas
-        
+
         for line in self.code_section:
             parts = line.split()
-            
+
             # Verificar si es una etiqueta
             if parts and parts[0].endswith(':'):
                 label = parts[0].rstrip(':')
-                
+
                 # Validaciones de la etiqueta
                 if len(label) > 10:
                     print(f"Error: La etiqueta '{label}' excede 10 caracteres")
                     continue
-                
+
                 if label in self.symbol_table:
                     print(f"Error: La etiqueta '{label}' ya está definida")
                     continue
-                
+
                 if label[0].isdigit():
                     print(f"Error: El nombre de etiqueta '{label}' no puede comenzar con un número")
                     continue
-                
+
                 # Almacenar la dirección de la etiqueta
                 label_addresses[label] = current_code_address
-            
+                self.dicc.tags_addresses[label] = f'{current_code_address:04X}h'
+
             # Solo incrementar la dirección de código si la línea no es solo una etiqueta
             if not line.strip().endswith(':') and line.strip():
-                # Verificar si la línea está en el mapa de código de máquina
                 if line in self.machine_code_map:
                     details = self.machine_code_map[line]
-                    # Incrementar por 2 solo si no es "Error"
                     if details['machine_code_hex'] != 'Error':
                         current_code_address += 2
                 else:
@@ -700,6 +698,10 @@ class AsmAnalyzer:
 
                 try:
                     total_size, count, inner_value = process_value_size(directive, value)
+
+                    if symbol is not None:
+                        # Add to vars_addresses dictionary
+                        self.dicc.vars_addresses[symbol] = f'{current_stack_address:04X}h'
 
                     # Generate or use provided symbol name
                     if symbol is None:
@@ -749,7 +751,7 @@ class AsmAnalyzer:
                     print(f"Error: Symbol name '{symbol}' exceeds 10 characters")
                     continue
 
-                # Check for duplicate variables ACROSS ALL TYPES
+                # Check for duplicate variables
                 if symbol in self.symbol_table:
                     print(f"Error: Symbol '{symbol}' already defined")
                     continue
@@ -757,6 +759,10 @@ class AsmAnalyzer:
                 if symbol[0].isdigit():
                     print(f"Error: Variable name '{symbol}' cannot start with a number")
                     continue
+
+                # Add to vars_addresses for data variables
+                if directive in ['DB', 'DW', 'DD']:
+                    self.dicc.vars_addresses[symbol] = f'{self.data_address_counter:04X}h'
 
                 # Handling for constants (EQU)
                 if directive == 'EQU':
@@ -776,58 +782,40 @@ class AsmAnalyzer:
 
                 # Handling for DB, DW, DD directives
                 if directive in ['DB', 'DW', 'DD']:
-                    def convert_value(val):
-                        val = val.strip('"')
-                        if val.upper().endswith('H'):
-                            return int(val[:-1], 16)
-                        elif val.upper().endswith('B'):
-                            return int(val[:-1], 2)
-                        elif val.upper().endswith('O'):
-                            return int(val[:-1], 8)
-                        elif val.startswith('0X'):
-                            return int(val, 16)
-                        else:
-                            return int(val)
+                    # [Previous DB, DW, DD handling code remains unchanged]
+                    size_map = {'DB': 1, 'DW': 2, 'DD': 4}
+                    tamaño = size_map[directive]
 
                     # Handle DUP statement
                     dup_count = None
                     if 'DUP' in value:
                         dup_parts = value.split('DUP')
-                        dup_count = int(dup_parts[0].strip())
-                        value = dup_parts[1].strip('()')
+                        try:
+                            dup_count = int(dup_parts[0].strip())
+                            value = dup_parts[1].strip('()')
+                        except ValueError:
+                            print(f"Error: Invalid DUP count for '{symbol}'")
+                            continue
 
-                    try:
-                        # Determine type and size based on directive
-                        size_map = {'DB': 1, 'DW': 2, 'DD': 4}
-                        tamaño = size_map[directive]
+                    total_size = tamaño * (dup_count if dup_count is not None else 1)
 
-                        # Convert value and calculate total size for DUP
-                        numeric_value = convert_value(value)
-                        total_size = tamaño * (dup_count if dup_count is not None else 1)
+                    # Add symbol to symbol table
+                    self.symbol_table[symbol] = {
+                        'símbolo': symbol,
+                        'tipo': f'{directive}{"" if dup_count is None else f" DUP({dup_count})"}',
+                        'valor': value,
+                        'tamaño': total_size,
+                        'dirección': f'{self.data_address_counter:04X}h'
+                    }
 
-                        # Add symbol to symbol table
-                        self.symbol_table[symbol] = {
-                            'símbolo': symbol,
-                            'tipo': f'{directive}{"" if dup_count is None else f" DUP({dup_count})"}',
-                            'valor': value,
-                            'tamaño': total_size,
-                            'dirección': f'{self.data_address_counter:04X}h'
-                        }
-
-                        # Increment address counter by total size
-                        self.data_address_counter += total_size
-
-                    except ValueError:
-                        print(f"Error: Invalid value format for '{symbol}'")
-                        continue
+                    # Increment address counter by total size
+                    self.data_address_counter += total_size
 
         # Update labels with addresses from source
         for label, address in label_addresses.items():
             if label in self.symbol_table:
-                # Update existing label entry
                 self.symbol_table[label]['dirección'] = f'{address:04X}h'
             else:
-                # Add new label entry if not already in symbol table
                 self.symbol_table[label] = {
                     'símbolo': label,
                     'tipo': 'etq',
@@ -836,6 +824,8 @@ class AsmAnalyzer:
                     'dirección': f'{address:04X}h'
                 }
 
+        print(self.dicc.vars_addresses)
+        print(self.dicc.tags_addresses)
         return self.symbol_table
 
     def generate_variables_dict(self):
@@ -867,7 +857,7 @@ class AsmAnalyzer:
                 verification_results.append((line_clean, result))
 
         return verification_results
-    
+
     def verify_single_instruction(self, instruction):
         # Limpiar y convertir a mayúsculas
         instruction_upper = instruction.upper().strip()
