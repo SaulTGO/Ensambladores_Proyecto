@@ -13,12 +13,11 @@ class AsmAnalyzer:
         self.current_section = None
         self.original_code = []
         self.lines_per_page = 20
-        self.data_address_counter = 0x0250  # Initial address for data segment
-        self.code_address_counter = 0x0250  # Initial address for code segment
+        self.data_address_counter = 0x0250
+        self.code_address_counter = 0x0250
         self.machine_code_map = {}
         self.variables_dict = {}
 
-        # Modificar esta línea para hacer dicc un atributo de la clase
         self.dicc = Dictionary()
 
         # Set dictionaries from dictionaries.py
@@ -185,16 +184,16 @@ class AsmAnalyzer:
     def get_source_with_details(self):
         source_details = []
 
-        # Reset tags_addresses dictionary
+        # Reset tags_addresses dictionary como en Analyzer malo
         self.dicc.tags_addresses = {}
 
-        # Initialize counters for different segments
+        # Initialize counters
         current_code_address = 0x0250
         current_data_address = 0x0250
         current_stack_address = 0x0250
         current_segment = None
 
-        # Dictionary of jump instructions with their opcodes
+        # Jump instructions from Analyzer malo
         jump_instructions = {
             'JMP': '74', 'JE': '74', 'JNE': '75',
             'JL': '7C', 'JLE': '7E', 'JG': '7F',
@@ -203,13 +202,13 @@ class AsmAnalyzer:
             'LOOPNE': 'E0'
         }
 
-        # Process each line
+        # First pass: collect all labels and their addresses
         for line in self.original_code:
             clean_line = self.remove_comments(line)
             if not clean_line:
                 continue
 
-            # Segment change detection
+            # Segment detection
             if '.CODE' in line.upper():
                 current_segment = 'code'
                 current_code_address = 0x0250
@@ -226,12 +225,12 @@ class AsmAnalyzer:
                 source_details.append(f"0250h | {line} | {'Correcto'}")
                 continue
 
-            # Process line based on current segment
+            # Process line based on segment
             if current_segment == 'code':
-                # Check if it's a label
+                # Check if it's a label first
                 if clean_line.endswith(':'):
                     label = clean_line.rstrip(':').strip()
-                    # Add to tags_addresses dictionary
+                    # Add to tags_addresses dictionary como en Analyzer malo
                     self.dicc.tags_addresses[label] = f'{current_code_address:04X}'
                     source_details.append(
                         f"{current_code_address:04X}h | {line} | {'Correcto'}"
@@ -241,12 +240,12 @@ class AsmAnalyzer:
                 parts = clean_line.split()
                 instruction = parts[0].upper()
 
-                # Handle jump instructions
+                # Handle jump instructions usando la lógica de Analyzer malo
                 if instruction in jump_instructions:
                     if len(parts) > 1:
                         target_label = parts[1].strip()
                         opcode = jump_instructions[instruction]
-                        
+
                         # Check if label exists in tags_addresses
                         if target_label in self.dicc.tags_addresses:
                             target_addr = self.dicc.tags_addresses[target_label]
@@ -273,7 +272,6 @@ class AsmAnalyzer:
                         f"{current_code_address:04X}h | {line} | {'Error'}"
                     )
 
-            # Rest of the method remains unchanged...
             elif current_segment == 'data':
                 parts = line.split()
                 first_part = parts[0]
@@ -407,170 +405,130 @@ class AsmAnalyzer:
     def generate_symbol_table(self):
         # Reset address counters to initial base address
         base_address = 0x0250
-        self.data_address_counter = base_address
-        self.code_address_counter = base_address
+        current_address = base_address
         self.symbol_table = {}
         self.label_table = set()
 
-        # Reset dictionary from Dictionary class
+        # Reset dictionaries from Dictionary class
+        self.dicc.tags_addresses = {}
         self.dicc.vars_addresses = {}
 
-        # Process stack section with improved address tracking
-        current_stack_address = base_address
-        stack_variables_count = 0
+        # First pass: collect all addresses from source details
+        source_details = self.get_source_with_details()
+        address_map = {}
 
-        for line in self.stack_section:
-            parts = line.split()
-            if len(parts) >= 3:
-                symbol = parts[0] if not parts[0].endswith(':') else None
-                directive = parts[1].upper()
-                value = ' '.join(parts[2:])
+        for detail in source_details:
+            # Each detail is in format "XXXXh | instruction | status"
+            parts = detail.split('|')
+            if len(parts) >= 2:
+                address = parts[0].strip().rstrip('h')  # Remove 'h' suffix
+                instruction = parts[1].strip()
 
-                def process_value_size(directive, value):
-                    size_map = {'DB': 1, 'DW': 2, 'DD': 4}
-                    base_size = size_map.get(directive, 1)
+                # Store the address for this instruction
+                address_map[instruction] = int(address, 16)
 
-                    if 'DUP' in value:
-                        dup_parts = value.split('DUP')
-                        dup_count = int(dup_parts[0].strip())
-                        inner_value = dup_parts[1].strip('()')
-                        total_size = base_size * dup_count
-                        return total_size, dup_count, inner_value
+        # Now process sections using the collected addresses
+        current_section = None
 
-                    elif 'DOUBLE' in value:
-                        double_parts = value.split('DOUBLE')
-                        base_value = double_parts[0].strip()
-                        total_size = base_size * 2
-                        return total_size, 1, base_value
+        for line in self.original_code:
+            clean_line = self.remove_comments(line)
+            if not clean_line:
+                continue
 
-                    return base_size, 1, value
+            # Detect section changes
+            if '.CODE' in line.upper():
+                current_section = 'code'
+                continue
+            elif '.DATA' in line.upper():
+                current_section = 'data'
+                continue
+            elif '.STACK' in line.upper():
+                current_section = 'stack'
+                continue
 
-                if directive not in ['DB', 'DW', 'DD']:
-                    continue
+            # Get address from address_map
+            current_address = address_map.get(clean_line, current_address)
 
-                try:
-                    total_size, count, inner_value = process_value_size(directive, value)
+            if current_section == 'data':
+                parts = clean_line.split()
+                if len(parts) >= 3:
+                    symbol = parts[0]
+                    directive = parts[1].upper()
+                    value = ' '.join(parts[2:])
 
-                    if symbol is not None:
-                        # Add to vars_addresses dictionary
-                        self.dicc.vars_addresses[symbol] = f'{current_stack_address:04X}h'
-
-                    # Generate or use provided symbol name
-                    if symbol is None:
-                        stack_variable_name = f'_stack_var{stack_variables_count}'
-                        stack_variables_count += 1
-                    else:
-                        stack_variable_name = symbol
-
-                    # Check for duplicate variables
-                    if stack_variable_name in self.symbol_table:
-                        print(f"Error: Stack variable '{stack_variable_name}' already defined")
+                    if symbol[0].isdigit() or len(symbol) > 10:
                         continue
 
-                    # Modify tipo generation to remove (1)
-                    tipo_str = directive
-                    if 'DUP' in value:
-                        tipo_str += f' DUP({count})'
-                    elif 'DOUBLE' in value:
-                        tipo_str += ' DOUBLE'
+                    # Handle data variables
+                    if directive in ['DB', 'DW', 'DD']:
+                        size_map = {'DB': 1, 'DW': 2, 'DD': 4}
+                        base_size = size_map[directive]
 
-                    # Add to symbol table with correct size and address
-                    self.symbol_table[stack_variable_name] = {
-                        'símbolo': stack_variable_name,
-                        'tipo': tipo_str,
-                        'valor': inner_value,
-                        'tamaño': total_size,
-                        'dirección': f'{current_stack_address:04X}h'
-                    }
-
-                    # Update stack address by the total calculated size
-                    current_stack_address += total_size
-
-                except ValueError:
-                    print(f"Error: Invalid value format in stack segment for {stack_variable_name}")
-                    continue
-
-        # Process data section symbols
-        for line in self.data_section:
-            parts = line.split()
-            if len(parts) >= 3:
-                symbol = parts[0]
-                directive = parts[1].upper()
-                value = ' '.join(parts[2:])
-
-                # Validation for symbol name
-                if len(symbol) > 10:
-                    print(f"Error: Symbol name '{symbol}' exceeds 10 characters")
-                    continue
-
-                # Check for duplicate variables
-                if symbol in self.symbol_table:
-                    print(f"Error: Symbol '{symbol}' already defined")
-                    continue
-
-                if symbol[0].isdigit():
-                    print(f"Error: Variable name '{symbol}' cannot start with a number")
-                    continue
-
-                # Add to vars_addresses for data variables
-                if directive in ['DB', 'DW', 'DD']:
-                    self.dicc.vars_addresses[symbol] = f'{self.data_address_counter:04X}h'
-
-                # Handling for constants (EQU)
-                if directive == 'EQU':
-                    if self.get_constant_type(value):
-                        self.symbol_table[symbol] = {
-                            'símbolo': symbol,
-                            'tipo': 'const',
-                            'valor': value,
-                            'tamaño': 2,
-                            'dirección': f'{self.data_address_counter:04X}h'
-                        }
-                        # Increment address for constants
-                        self.data_address_counter += 2
-                    else:
-                        print(f"Error: Invalid constant value for '{symbol}'")
-                    continue
-
-                # Handling for DB, DW, DD directives
-                if directive in ['DB', 'DW', 'DD']:
-                    size_map = {'DB': 1, 'DW': 2, 'DD': 4}
-                    tamaño = size_map[directive]
-
-                    # Handle DUP statement
-                    dup_count = None
-                    if 'DUP' in value:
-                        dup_parts = value.split('DUP')
-                        try:
+                        total_size = base_size
+                        if 'DUP' in value:
+                            dup_parts = value.split('DUP')
                             dup_count = int(dup_parts[0].strip())
                             value = dup_parts[1].strip('()')
+                            total_size = base_size * dup_count
+                        elif 'DOUBLE' in value:
+                            total_size = base_size * 2
+
+                        self.dicc.vars_addresses[symbol] = f'{current_address:04X}h'
+                        self.symbol_table[symbol] = {
+                            'símbolo': symbol,
+                            'tipo': directive,
+                            'valor': value,
+                            'tamaño': total_size,
+                            'dirección': f'{current_address:04X}h'
+                        }
+
+            elif current_section == 'code':
+                parts = clean_line.split()
+                if parts and parts[0].endswith(':'):
+                    label = parts[0].rstrip(':')
+                    if not label[0].isdigit() and len(label) <= 10:
+                        self.dicc.tags_addresses[label] = f'{current_address:04X}h'
+                        self.symbol_table[label] = {
+                            'símbolo': label,
+                            'tipo': 'etq',
+                            'valor': '',
+                            'tamaño': 0,
+                            'dirección': f'{current_address:04X}h'
+                        }
+
+            elif current_section == 'stack':
+                parts = clean_line.split()
+                if len(parts) >= 3:
+                    symbol = parts[0] if not parts[0].endswith(':') else None
+                    directive = parts[1].upper()
+                    value = ' '.join(parts[2:])
+
+                    if directive in ['DB', 'DW', 'DD']:
+                        size_map = {'DB': 1, 'DW': 2, 'DD': 4}
+                        base_size = size_map[directive]
+
+                        try:
+                            total_size = base_size
+                            if 'DUP' in value:
+                                dup_parts = value.split('DUP')
+                                dup_count = int(dup_parts[0].strip())
+                                value = dup_parts[1].strip('()')
+                                total_size = base_size * dup_count
+                            elif 'DOUBLE' in value:
+                                total_size = base_size * 2
+
+                            if symbol and symbol not in self.symbol_table:
+                                self.dicc.vars_addresses[symbol] = f'{current_address:04X}h'
+                                self.symbol_table[symbol] = {
+                                    'símbolo': symbol,
+                                    'tipo': directive,
+                                    'valor': value,
+                                    'tamaño': total_size,
+                                    'dirección': f'{current_address:04X}h'
+                                }
+
                         except ValueError:
-                            print(f"Error: Invalid DUP count for '{symbol}'")
                             continue
-
-                    total_size = tamaño * (dup_count if dup_count is not None else 1)
-
-                    # Add symbol to symbol table
-                    self.symbol_table[symbol] = {
-                        'símbolo': symbol,
-                        'tipo': f'{directive}{"" if dup_count is None else f" DUP({dup_count})"}',
-                        'valor': value,
-                        'tamaño': total_size,
-                        'dirección': f'{self.data_address_counter:04X}h'
-                    }
-
-                    # Increment address counter by total size
-                    self.data_address_counter += total_size
-
-        # Add labels to symbol table from tags_addresses dictionary
-        for label, address in self.dicc.tags_addresses.items():
-            self.symbol_table[label] = {
-                'símbolo': label,
-                'tipo': 'etq',
-                'valor': '',
-                'tamaño': 0,
-                'dirección': address + 'h'
-            }
 
         return self.symbol_table
 
@@ -587,6 +545,241 @@ class AsmAnalyzer:
                 }
 
         return self.variables_dict
+
+    def generate_machine_code(self):
+        # Reset code address counter and maps
+        self.code_address_counter = 0x0250
+        self.machine_code_map = {}
+        label_addresses = {}  # Dictionary to store label addresses
+
+        # Generate variables dictionary at the start
+        self.generate_variables_dict()
+
+        # Expanded addressing mode dictionary
+        addressing_modes = {
+            '00': 'DIRECT/MEMORY',  # Direct addressing or memory operand
+            '01': 'IMMEDIATE',  # Immediate data
+            '10': 'INDIRECT',  # Indirect addressing
+            '11': 'REGISTER'  # Register-to-register
+        }
+
+        # Comprehensive register encoding for 16-bit and 8-bit registers
+        register_encoding = {
+            '16BIT': {
+                'AX': '000', 'CX': '001', 'DX': '010', 'BX': '011',
+                'SP': '100', 'BP': '101', 'SI': '110', 'DI': '111'
+            },
+            '8BIT': {
+                'AL': '000', 'CL': '001', 'DL': '010', 'BL': '011',
+                'AH': '100', 'CH': '101', 'DH': '110', 'BH': '111'
+            }
+        }
+
+        def process_operand(operand):
+            """Processes an operand and determines if it's a register, variable or immediate value"""
+            operand = operand.upper()
+            if operand in register_encoding['16BIT'] or operand in register_encoding['8BIT']:
+                return 'register', operand
+            elif operand in self.variables_dict:
+                return 'variable', operand
+            elif any(pattern.match(operand) for pattern in [
+                re.compile(r'^[0-9A-Fa-f]+[Hh]$'),
+                re.compile(r'^\d+$'),
+                re.compile(r'^[01]+[Bb]$')
+            ]):
+                return 'immediate', operand
+            return 'unknown', operand
+
+        def encode_cmp_with_variable(reg, var_name):
+            """Generates machine code for CMP with variable"""
+            if var_name in self.variables_dict:
+                var_info = self.variables_dict[var_name]
+                is_word = var_info['tipo'].startswith('DW')
+
+                # Base format for CMP with memory
+                machine_code = '001110'  # Base opcode for CMP
+                machine_code += '1'  # Direction (reg to memory)
+                machine_code += '1' if is_word else '0'  # Word/Byte
+                machine_code += '00'  # Direct mode
+                machine_code += register_encoding['16BIT'][reg] if is_word else register_encoding['8BIT'][reg]
+                machine_code += '110'  # Direct memory mode
+
+                # Add variable address (16 bits)
+                var_addr = int(var_info['dirección'].rstrip('h'), 16)
+                addr_binary = format(var_addr, '016b')
+                machine_code += addr_binary
+
+                return machine_code
+            return None
+
+        def group_and_convert_to_hex(binary_str):
+            """Group binary string into groups of 4 bits and convert to hex."""
+            # Pad the binary string to ensure it's divisible by 4
+            binary_str = binary_str.zfill((len(binary_str) + 3) // 4 * 4)
+
+            # Group into 4-bit chunks
+            groups = [binary_str[i:i + 4] for i in range(0, len(binary_str), 4)]
+
+            # Convert each 4-bit group to hex
+            hex_groups = [hex(int(group, 2))[2:].upper() for group in groups]
+
+            return ' '.join(hex_groups)
+
+        # First pass: collect label addresses
+        current_address = self.code_address_counter
+        for line in self.code_section:
+            parts = line.split()
+            if parts and parts[0].endswith(':'):
+                label = parts[0].rstrip(':')
+                label_addresses[label] = current_address
+            if not line.strip().endswith(':'):  # Only increment for non-label lines
+                current_address += 2  # Assuming all instructions are 2 bytes
+
+        # Second pass: generate machine code
+        for line in self.code_section:
+            parts = line.split()
+            if not parts:
+                continue
+
+            instruction = parts[0].upper()
+            if instruction.endswith(':'):  # Skip label definitions
+                continue
+
+            try:
+                machine_code_binary = ''
+                addressing_mode = ''
+
+                # Handle jump instructions
+                if instruction in ['JMP', 'JE', 'JNE', 'JL', 'JLE', 'JG', 'JGE', 'JA', 'JC']:
+                    if len(parts) > 1:
+                        target_label = parts[1].upper()
+                        if target_label in label_addresses:
+                            # Get base opcode for jump instruction
+                            base_opcode = self.machine_code_reference.get(instruction)
+                            if base_opcode:
+                                target_address = label_addresses[target_label]
+                                # Calculate relative offset (target - current - 2)
+                                offset = target_address - (self.code_address_counter + 2)
+                                # Convert offset to 8-bit signed value
+                                if -128 <= offset <= 127:
+                                    offset_binary = format(offset & 0xFF, '08b')
+                                    machine_code_binary = base_opcode + offset_binary
+                                    addressing_mode = addressing_modes['00']
+                                else:
+                                    machine_code_binary = f"Error: Jump offset too large"
+                            else:
+                                machine_code_binary = f"Error: Unknown jump instruction"
+                        else:
+                            machine_code_binary = f"Error: Undefined label {target_label}"
+                    else:
+                        machine_code_binary = f"Error: Missing target for jump instruction"
+
+                # Handle PUSH/POP
+                elif instruction in ['PUSH', 'POP']:
+                    if len(parts) > 1:
+                        reg = parts[1].upper()
+                        if reg in register_encoding['16BIT']:
+                            machine_code_binary = (
+                                    ('01010' if instruction == 'PUSH' else '01011') +
+                                    register_encoding['16BIT'][reg]
+                            )
+                            addressing_mode = addressing_modes['11']
+                        else:
+                            machine_code_binary = f"Error: Invalid register {reg}"
+                    else:
+                        machine_code_binary = f"Error: Missing register for {instruction}"
+
+                # Handle CMP
+                elif instruction == 'CMP' and len(parts) == 3:
+                    op1, op2 = parts[1].upper(), parts[2].upper()
+                    op1_type, op1_val = process_operand(op1)
+                    op2_type, op2_val = process_operand(op2)
+
+                    if op1_type == 'register' and op2_type == 'variable':
+                        machine_code_binary = encode_cmp_with_variable(op1_val, op2_val)
+                        if machine_code_binary:
+                            addressing_mode = addressing_modes['00']  # Direct mode
+                        else:
+                            machine_code_binary = "Error: Invalid variable reference"
+                    elif op1_type == 'register' and op2_type == 'register':
+                        if (op1_val in register_encoding['16BIT'] and
+                                op2_val in register_encoding['16BIT']):
+                            machine_code_binary = (
+                                    '001110' +  # CMP opcode
+                                    '1' +  # Direction bit (dest <- src)
+                                    '1' +  # Word operation
+                                    '11' +  # Register-to-register mode
+                                    register_encoding['16BIT'][op2_val] +  # Dest register
+                                    register_encoding['16BIT'][op1_val]  # Src register
+                            )
+                            addressing_mode = addressing_modes['11']
+                        else:
+                            machine_code_binary = f"Error: Invalid registers"
+                    else:
+                        machine_code_binary = f"Error: Invalid operand types for CMP"
+
+                # Handle MOV
+                elif instruction == 'MOV':
+                    if len(parts) == 3:
+                        src, dest = parts[1].upper(), parts[2].upper()
+
+                        # Register-to-register MOV (16-bit)
+                        if src in register_encoding['16BIT'] and dest in register_encoding['16BIT']:
+                            machine_code_binary = (
+                                    '1000100' +  # MOV opcode
+                                    '1' +  # Word operation
+                                    '11' +  # Register-to-register mode
+                                    register_encoding['16BIT'][dest] +  # Dest register
+                                    register_encoding['16BIT'][src]  # Src register
+                            )
+                            addressing_mode = addressing_modes['11']
+
+                        # Register-to-register MOV (8-bit)
+                        elif src in register_encoding['8BIT'] and dest in register_encoding['8BIT']:
+                            machine_code_binary = (
+                                    '1000100' +  # MOV opcode
+                                    '0' +  # Byte operation
+                                    '11' +  # Register-to-register mode
+                                    register_encoding['8BIT'][dest] +  # Dest register
+                                    register_encoding['8BIT'][src]  # Src register
+                            )
+                            addressing_mode = addressing_modes['11']
+                        else:
+                            machine_code_binary = f"Error: Invalid registers"
+                    else:
+                        machine_code_binary = f"Error: Incorrect MOV arguments"
+
+                else:
+                    # Default machine code from reference
+                    machine_code_binary = self.machine_code_reference.get(instruction,
+                                                                          f"Not implemented: {instruction}")
+                    addressing_mode = 'UNDEFINED'
+
+                # Convert binary to grouped hex
+                machine_code_hex = group_and_convert_to_hex(machine_code_binary) if not machine_code_binary.startswith(
+                    'Error') else 'Error'
+
+                # Store machine code with address and details
+                self.machine_code_map[line] = {
+                    'address': f'{self.code_address_counter:04X}h',
+                    'machine_code_binary': machine_code_binary,
+                    'machine_code_hex': machine_code_hex,
+                    'addressing_mode': addressing_mode
+                }
+
+                # Increment address (2 bytes per instruction)
+                if not line.strip().endswith(':'):  # Only increment for non-label lines
+                    self.code_address_counter += 2
+
+            except Exception as e:
+                self.machine_code_map[line] = {
+                    'address': f'{self.code_address_counter:04X}h',
+                    'machine_code_binary': f"Encoding error: {str(e)}",
+                    'machine_code_hex': 'Error',
+                    'addressing_mode': 'ERROR'
+                }
+                if not line.strip().endswith(':'):
+                    self.code_address_counter += 2
 
     def verify_instructions(self):
         verification_results = []
