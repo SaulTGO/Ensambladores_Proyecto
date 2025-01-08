@@ -153,6 +153,11 @@ class AsmAnalyzer:
                 print(f"Error: Variable name '{symbol}' cannot start with a number")
                 return
 
+            # New Validation: Check symbol length
+            if len(symbol) > 10:
+                print(f"Error: Variable name '{symbol}' exceeds maximum length of 10 characters")
+                return
+
             # Validation 2: Check string initialization
             if directive in ['DB', 'DW', 'DD']:
                 # Check for properly initialized strings with quotes
@@ -184,7 +189,7 @@ class AsmAnalyzer:
     def get_source_with_details(self):
         source_details = []
 
-        # Reset tags_addresses dictionary como en Analyzer malo
+        # Reset tags_addresses dictionary
         self.dicc.tags_addresses = {}
 
         # Initialize counters
@@ -192,8 +197,9 @@ class AsmAnalyzer:
         current_data_address = 0x0250
         current_stack_address = 0x0250
         current_segment = None
+        declared_labels = set()  # Set para rastrear etiquetas declaradas
 
-        # Jump instructions from Analyzer malo
+        # Jump instructions mapping
         jump_instructions = {
             'JMP': '74', 'JE': '74', 'JNE': '75',
             'JL': '7C', 'JLE': '7E', 'JG': '7F',
@@ -202,7 +208,14 @@ class AsmAnalyzer:
             'LOOPNE': 'E0'
         }
 
-        # First pass: collect all labels and their addresses
+        # First pass: collect all labels
+        for line in self.original_code:
+            clean_line = self.remove_comments(line)
+            if clean_line and clean_line.endswith(':'):
+                label = clean_line.rstrip(':').strip()
+                declared_labels.add(label)
+
+        # Second pass: process lines
         for line in self.original_code:
             clean_line = self.remove_comments(line)
             if not clean_line:
@@ -230,7 +243,6 @@ class AsmAnalyzer:
                 # Check if it's a label first
                 if clean_line.endswith(':'):
                     label = clean_line.rstrip(':').strip()
-                    # Add to tags_addresses dictionary como en Analyzer malo
                     self.dicc.tags_addresses[label] = f'{current_code_address:04X}'
                     source_details.append(
                         f"{current_code_address:04X}h | {line} | {'Correcto'}"
@@ -240,23 +252,32 @@ class AsmAnalyzer:
                 parts = clean_line.split()
                 instruction = parts[0].upper()
 
-                # Handle jump instructions usando la lógica de Analyzer malo
+                # Handle jump instructions
                 if instruction in jump_instructions:
                     if len(parts) > 1:
                         target_label = parts[1].strip()
                         opcode = jump_instructions[instruction]
 
-                        # Check if label exists in tags_addresses
+                        # Check if label has been declared
+                        if target_label not in declared_labels:
+                            source_details.append(
+                                f"{current_code_address:04X}h | {line} | {'Error'}"
+                            )
+                            # No incrementar el contador para etiquetas no declaradas
+                            continue
+
+                        # If label exists, show opcode + address format
                         if target_label in self.dicc.tags_addresses:
                             target_addr = self.dicc.tags_addresses[target_label]
                             machine_code = f"{opcode} {target_addr}h"
+                            source_details.append(
+                                f"{current_code_address:04X}h | {line} | {machine_code}"
+                            )
+                            current_code_address += 2
                         else:
-                            machine_code = "Error"
-
-                        source_details.append(
-                            f"{current_code_address:04X}h | {line} | {machine_code}"
-                        )
-                        current_code_address += 2
+                            source_details.append(
+                                f"{current_code_address:04X}h | {line} | {'Error'}"
+                            )
                         continue
 
                 # Handle other instructions
@@ -456,6 +477,7 @@ class AsmAnalyzer:
                     directive = parts[1].upper()
                     value = ' '.join(parts[2:])
 
+                    # Add length validation here as well
                     if symbol[0].isdigit() or len(symbol) > 10:
                         continue
 
@@ -486,6 +508,7 @@ class AsmAnalyzer:
                 parts = clean_line.split()
                 if parts and parts[0].endswith(':'):
                     label = parts[0].rstrip(':')
+                    # Also validate label length
                     if not label[0].isdigit() and len(label) <= 10:
                         self.dicc.tags_addresses[label] = f'{current_address:04X}h'
                         self.symbol_table[label] = {
@@ -504,6 +527,10 @@ class AsmAnalyzer:
                     value = ' '.join(parts[2:])
 
                     if directive in ['DB', 'DW', 'DD']:
+                        # Skip if symbol is too long
+                        if symbol and len(symbol) > 10:
+                            continue
+
                         size_map = {'DB': 1, 'DW': 2, 'DD': 4}
                         base_size = size_map[directive]
 
@@ -648,31 +675,41 @@ class AsmAnalyzer:
             try:
                 machine_code_binary = ''
                 addressing_mode = ''
+                should_increment_counter = True  # Flag to control counter increment
 
                 # Handle jump instructions
                 if instruction in ['JMP', 'JE', 'JNE', 'JL', 'JLE', 'JG', 'JGE', 'JA', 'JC']:
                     if len(parts) > 1:
                         target_label = parts[1].upper()
                         if target_label in label_addresses:
-                            # Get base opcode for jump instruction
-                            base_opcode = self.machine_code_reference.get(instruction)
-                            if base_opcode:
-                                target_address = label_addresses[target_label]
-                                # Calculate relative offset (target - current - 2)
-                                offset = target_address - (self.code_address_counter + 2)
-                                # Convert offset to 8-bit signed value
-                                if -128 <= offset <= 127:
-                                    offset_binary = format(offset & 0xFF, '08b')
-                                    machine_code_binary = base_opcode + offset_binary
-                                    addressing_mode = addressing_modes['00']
-                                else:
-                                    machine_code_binary = f"Error: Jump offset too large"
+                            target_address = label_addresses[target_label]
+                            # Solo permitir saltos hacia atrás
+                            if target_address >= self.code_address_counter:
+                                machine_code_binary = f"Error: Forward reference to label {target_label}"
+                                should_increment_counter = False
                             else:
-                                machine_code_binary = f"Error: Unknown jump instruction"
+                                # Get base opcode for jump instruction
+                                base_opcode = self.machine_code_reference.get(instruction)
+                                if base_opcode:
+                                    # Calculate relative offset (target - current - 2)
+                                    offset = target_address - (self.code_address_counter + 2)
+                                    # Convert offset to 8-bit signed value
+                                    if -128 <= offset <= 127:
+                                        offset_binary = format(offset & 0xFF, '08b')
+                                        machine_code_binary = base_opcode + offset_binary
+                                        addressing_mode = addressing_modes['00']
+                                    else:
+                                        machine_code_binary = f"Error: Jump offset too large"
+                                        should_increment_counter = False
+                                else:
+                                    machine_code_binary = f"Error: Unknown jump instruction"
+                                    should_increment_counter = False
                         else:
                             machine_code_binary = f"Error: Undefined label {target_label}"
+                            should_increment_counter = False
                     else:
                         machine_code_binary = f"Error: Missing target for jump instruction"
+                        should_increment_counter = False
 
                 # Handle PUSH/POP
                 elif instruction in ['PUSH', 'POP']:
@@ -686,8 +723,10 @@ class AsmAnalyzer:
                             addressing_mode = addressing_modes['11']
                         else:
                             machine_code_binary = f"Error: Invalid register {reg}"
+                            should_increment_counter = False
                     else:
                         machine_code_binary = f"Error: Missing register for {instruction}"
+                        should_increment_counter = False
 
                 # Handle CMP
                 elif instruction == 'CMP' and len(parts) == 3:
@@ -701,6 +740,7 @@ class AsmAnalyzer:
                             addressing_mode = addressing_modes['00']  # Direct mode
                         else:
                             machine_code_binary = "Error: Invalid variable reference"
+                            should_increment_counter = False
                     elif op1_type == 'register' and op2_type == 'register':
                         if (op1_val in register_encoding['16BIT'] and
                                 op2_val in register_encoding['16BIT']):
@@ -715,13 +755,15 @@ class AsmAnalyzer:
                             addressing_mode = addressing_modes['11']
                         else:
                             machine_code_binary = f"Error: Invalid registers"
+                            should_increment_counter = False
                     else:
                         machine_code_binary = f"Error: Invalid operand types for CMP"
+                        should_increment_counter = False
 
                 # Handle MOV
                 elif instruction == 'MOV':
                     if len(parts) == 3:
-                        src, dest = parts[1].upper(), parts[2].upper()
+                        dest, src = parts[1].upper(), parts[2].upper()
 
                         # Register-to-register MOV (16-bit)
                         if src in register_encoding['16BIT'] and dest in register_encoding['16BIT']:
@@ -746,13 +788,17 @@ class AsmAnalyzer:
                             addressing_mode = addressing_modes['11']
                         else:
                             machine_code_binary = f"Error: Invalid registers"
+                            should_increment_counter = False
                     else:
                         machine_code_binary = f"Error: Incorrect MOV arguments"
+                        should_increment_counter = False
 
                 else:
                     # Default machine code from reference
                     machine_code_binary = self.machine_code_reference.get(instruction,
                                                                           f"Not implemented: {instruction}")
+                    if machine_code_binary.startswith("Not implemented"):
+                        should_increment_counter = False
                     addressing_mode = 'UNDEFINED'
 
                 # Convert binary to grouped hex
@@ -767,8 +813,8 @@ class AsmAnalyzer:
                     'addressing_mode': addressing_mode
                 }
 
-                # Increment address (2 bytes per instruction)
-                if not line.strip().endswith(':'):  # Only increment for non-label lines
+                # Only increment the counter if the instruction is valid
+                if should_increment_counter and not line.strip().endswith(':'):
                     self.code_address_counter += 2
 
             except Exception as e:
@@ -778,8 +824,7 @@ class AsmAnalyzer:
                     'machine_code_hex': 'Error',
                     'addressing_mode': 'ERROR'
                 }
-                if not line.strip().endswith(':'):
-                    self.code_address_counter += 2
+                # Don't increment counter on error
 
     def verify_instructions(self):
         verification_results = []
