@@ -30,7 +30,7 @@ class AsmAnalyzerGUI:
 
         self.analyzer = AsmAnalyzer()
 
-        self.lines_per_page = 20
+        self.lines_per_page = 12
 
         self.current_page = {
             'source': 1,
@@ -106,8 +106,8 @@ class AsmAnalyzerGUI:
 
         self.verification_tree = ttk.Treeview(verification_frame,
                                               columns=('Línea', 'Validación'),
-                                              show='headings'
-                                              )
+                                              show='headings',
+                                              height=6)
         self.verification_tree.heading('Línea', text='Línea')
         self.verification_tree.heading('Validación', text='Validación')
         self.verification_tree.column('Línea', width=500, minwidth=200, stretch=tk.YES)
