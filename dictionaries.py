@@ -149,5 +149,13 @@ class Dictionary:
             r"^'.'$|^'[^']*'$": 'Constante Caracter'
         }
 
+        self.jump_opcodes = {
+            'JMP': '74', 'JE': '74', 'JNE': '75',
+            'JL': '7C', 'JLE': '7E', 'JG': '7F',
+            'JGE': '7D', 'JA': '77', 'JNAE': '72',
+            'JC': '72', 'LOOP': 'E2', 'LOOPE': 'E1',
+            'LOOPNE': 'E0'
+        }
+
         self.tags_addresses = {}
         self.vars_addresses = {}
