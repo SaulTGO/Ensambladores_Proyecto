@@ -17,6 +17,7 @@ class AsmAnalyzer:
         self.code_address_counter = 0x0250
         self.machine_code_map = {}
         self.variables_dict = {}
+        self.constants_dict = {}  # Nuevo diccionario para constantes
 
         self.dicc = Dictionary()
 
@@ -29,6 +30,7 @@ class AsmAnalyzer:
         self.registers_8bit = self.dicc.registers_8bit
         self.pseudo_instructions = self.dicc.pseudo_instructions
         self.constant_patterns = self.dicc.constant_patterns
+        self.jump_opcodes = self.dicc.jump_opcodes
 
         self.symbol_table = {}
         self.label_table = set()
@@ -109,78 +111,118 @@ class AsmAnalyzer:
             print(f"Error al procesar el archivo: {str(e)}")
 
     def parse_sections(self):
-        # Reset sections
+        # Reset sections and counters
         self.data_section = []
         self.code_section = []
         self.stack_section = []
         self.current_section = None
-
-        # Reset del diccionario de variables
         self.dicc.vars_addresses = {}
+        self.dicc.tags_addresses = {}  # Reset tags addresses
 
         # Variables para seguimiento de direcciones
-        current_address = 0x0250
-
+        current_data_address = 0x0250
+        current_code_address = 0x0250
+        
+        # Primera pasada: recolectar etiquetas y sus direcciones
+        temp_code_address = 0x0250
         for line in self.original_code:
+            clean_line = self.remove_comments(line)
+            if not clean_line:
+                continue
+
             # Detect section changes
-            if '.CODE' in line.upper():
+            if '.CODE' in clean_line.upper():
                 self.current_section = 'code'
                 continue
-            elif '.DATA' in line.upper():
+            elif '.DATA' in clean_line.upper():
                 self.current_section = 'data'
                 continue
-            elif '.STACK' in line.upper():
+            elif '.STACK' in clean_line.upper():
                 self.current_section = 'stack'
                 continue
 
-            # Process differently based on section
-            if self.current_section == 'data':
-                self.data_section.append(line)
+            if self.current_section == 'code':
+                # Si es una etiqueta
+                if clean_line.strip().endswith(':'):
+                    label = clean_line.strip()[:-1].strip()
+                    self.dicc.tags_addresses[label] = f'{temp_code_address:04X}h'
+                else:
+                    # Verificar si es una instrucción válida antes de incrementar el contador
+                    verification_result = self.verify_single_instruction(clean_line)
+                    if verification_result == "Correcta" or verification_result.startswith(("74", "75", "7C", "7E", "7F", "7D", "77", "72", "E2", "E1", "E0")):
+                        temp_code_address += 2
 
-                # Procesar variables en la sección de datos
-                parts = line.split()
-                if len(parts) >= 3:
+        # Segunda pasada: procesar secciones normalmente
+        self.current_section = None
+        for line in self.original_code:
+            clean_line = self.remove_comments(line)
+            if not clean_line:
+                continue
+
+            # Detect section changes
+            if '.CODE' in clean_line.upper():
+                self.current_section = 'code'
+                continue
+            elif '.DATA' in clean_line.upper():
+                self.current_section = 'data'
+                continue
+            elif '.STACK' in clean_line.upper():
+                self.current_section = 'stack'
+                continue
+
+            if self.current_section == 'data':
+                self.data_section.append(clean_line)
+                parts = clean_line.split()
+                if len(parts) >= 2:
                     var_name = parts[0]
                     directive = parts[1].upper()
-                    value = ' '.join(parts[2:])
+                    value = ' '.join(parts[2:]) if len(parts) > 2 else ''
 
-                    # Validar la línea usando process_data_line
-                    is_valid, message = self.process_data_line(line)
+                    # Procesar constantes (EQU)
+                    if directive == 'EQU':
+                        is_valid, message = self.process_data_line(clean_line)
+                        if is_valid:
+                            self.constants_dict[var_name] = {
+                                'valor': value,
+                                'tipo': 'EQU'
+                            }
+                        continue
 
-                    # Solo procesar si la validación fue exitosa
-                    if is_valid and message == "Correcto":
-                        # Calcular tamaño basado en la directiva
-                        size_map = {'DB': 1, 'DW': 2, 'DD': 4}
-                        base_size = size_map.get(directive, 0)
+                    # Procesar variables normales
+                    if len(parts) >= 3:
+                        is_valid, message = self.process_data_line(clean_line)
+                        if is_valid and message == "Correcto":
+                            size_map = {'DB': 1, 'DW': 2, 'DD': 4}
+                            base_size = size_map.get(directive, 0)
+                            
+                            total_size = base_size
+                            if 'DUP' in value.upper():
+                                dup_parts = value.split('DUP')
+                                try:
+                                    dup_count = int(dup_parts[0].strip())
+                                    total_size = base_size * dup_count
+                                except ValueError:
+                                    continue
 
-                        total_size = base_size
-                        if 'DUP' in value.upper():
-                            dup_parts = value.split('DUP')
-                            try:
-                                dup_count = int(dup_parts[0].strip())
-                                total_size = base_size * dup_count
-                            except ValueError:
-                                continue
-                        elif 'DOUBLE' in value.upper():
-                            total_size = base_size * 2
-
-                        # Almacenar en vars_addresses solo si es válida
-                        self.dicc.vars_addresses[var_name] = {
-                            'dirección': f'{current_address:04X}h',
-                            'tipo': directive,
-                            'valor': value,
-                            'tamaño': total_size
-                        }
-
-                        # Actualizar la dirección solo para variables válidas
-                        current_address += total_size
+                            self.dicc.vars_addresses[var_name] = {
+                                'dirección': f'{current_data_address:04X}h',
+                                'tipo': directive,
+                                'valor': value,
+                                'tamaño': total_size
+                            }
+                            current_data_address += total_size
 
             elif self.current_section == 'code':
-                self.code_section.append(line)
-            elif self.current_section == 'stack':
-                self.stack_section.append(line)
+                self.code_section.append(clean_line)
+                if not clean_line.endswith(':'):  # No incrementar para etiquetas
+                    verification_result = self.verify_single_instruction(clean_line)
+                    if verification_result == "Correcta" or verification_result.startswith(("74", "75", "7C", "7E", "7F", "7D", "77", "72", "E2", "E1", "E0")):
+                        current_code_address += 2
 
-        # Second pass: generate machine code
+            elif self.current_section == 'stack':
+                self.stack_section.append(clean_line)
+
+        # Actualizar machine_code después de procesar todas las secciones
         self.generate_machine_code()
 
     def process_data_line(self, line):
@@ -189,11 +231,33 @@ class AsmAnalyzer:
         Retorna una tupla (bool, str) indicando si es válida y el mensaje de error si existe
         """
         parts = line.split()
-        if len(parts) >= 3:
-            symbol = parts[0]
-            directive = parts[1].upper()
-            value = ' '.join(parts[2:])
+        if len(parts) < 2:
+            return False, "Formato de línea incorrecto"
 
+        symbol = parts[0]
+        directive = parts[1].upper()
+
+        # Validar constantes (EQU)
+        if directive == 'EQU':
+            if len(parts) < 3:
+                return False, "Falta valor para la constante"
+            
+            # Validación del nombre de la constante
+            if symbol[0].isdigit():
+                return False, f"'{symbol}' No puede comenzar con un número"
+            if len(symbol) > 10:
+                return False, f"'{symbol}' Nombre mayor a 10 caracteres"
+
+            value = ' '.join(parts[2:])
+            # Verificar si es un número válido (decimal, hexadecimal o binario)
+            if (re.match(r'^[0-9A-Fa-f]+[Hh]$', value) or 
+                value.isdigit() or 
+                (value.upper().endswith('B') and all(bit in '01' for bit in value[:-1]))):
+                return True, "Correcto"
+            return False, f"Valor no válido para la constante '{symbol}'"
+
+        # Resto del código para otras directivas
+        if len(parts) >= 3:
             # Validación del nombre de la variable
             if symbol[0].isdigit():
                 return False, f"'{symbol}' No puede comenzar con un número"
@@ -206,11 +270,24 @@ class AsmAnalyzer:
             if directive not in ['DB', 'DW', 'DD']:
                 return False, f"Instruccion '{directive}' no válida"
 
+            value = ' '.join(parts[2:])
+
             # Validación de la inicialización
             if directive in ['DB', 'DW', 'DD']:
                 # Verificar strings con comillas
                 if value.startswith('"') and value.endswith('"'):
                     return True, "Correcto"
+
+                # Verificar números binarios
+                if value.upper().endswith('B'):
+                    binary_str = value[:-1]
+                    if all(bit in '01' for bit in binary_str):
+                        # Verificar longitud según directiva
+                        bit_length = len(binary_str)
+                        max_bits = {'DB': 8, 'DW': 16, 'DD': 32}
+                        if bit_length <= max_bits[directive]:
+                            return True, "Correcto"
+                        return False, f"Excede el tamaño permitido para {directive}"
 
                 # Verificar valores numéricos hexadecimales o decimales
                 elif re.match(r'^[0-9A-Fa-f]+[Hh]$|^\d+$', value):
@@ -222,161 +299,139 @@ class AsmAnalyzer:
                     if dup_match:
                         count = dup_match.group(1)
                         dup_value = dup_match.group(2)
-                        if count.isdigit() and (
-                                dup_value.strip('\"').isalnum() or
+                        
+                        # Verificar si el valor DUP es binario
+                        if dup_value.upper().endswith('B'):
+                            binary_str = dup_value[:-1]
+                            if all(bit in '01' for bit in binary_str):
+                                return True, "Correcto"
+                        
+                        # Verificar otros tipos de valores DUP
+                        if (dup_value.strip('\"').isalnum() or
                                 re.match(r'^[0-9A-Fa-f]+[Hh]$', dup_value) or
-                                dup_value.isdigit()
-                        ):
+                                dup_value.isdigit()):
                             return True, "Correcto"
 
+                    return False, f"Inicialización DUP no válida para '{symbol}'"
+
                 return False, f"Inicialización no válida para '{symbol}'"
+
+            return False, "Formato de línea incorrecto"
 
         return False, "Formato de línea incorrecto"
 
     def get_source_with_details(self):
         source_details = []
-
-        # Reset tags_addresses dictionary
-        self.dicc.tags_addresses = {}
-
-        # Initialize counters
         current_code_address = 0x0250
         current_data_address = 0x0250
         current_stack_address = 0x0250
         current_segment = None
-        declared_labels = set()
 
-        # Jump instruction opcodes mapping
-        jump_opcodes = {
-            'JMP': '74', 'JE': '74', 'JNE': '75',
-            'JL': '7C', 'JLE': '7E', 'JG': '7F',
-            'JGE': '7D', 'JA': '77', 'JNAE': '72',
-            'JC': '72', 'LOOP': 'E2', 'LOOPE': 'E1',
-            'LOOPNE': 'E0'
-        }
-
-        # First pass: collect all labels
-        for line in self.original_code:
-            clean_line = self.remove_comments(line)
-            if clean_line and clean_line.endswith(':'):
-                label = clean_line.rstrip(':').strip()
-                declared_labels.add(label)
-
-        # Second pass: process lines
+        # Primera pasada: recopilar todas las etiquetas y sus direcciones
+        temp_code_address = 0x0250
         for line in self.original_code:
             clean_line = self.remove_comments(line)
             if not clean_line:
                 continue
 
-            # Segment detection
-            if '.CODE' in line.upper():
+            if '.CODE' in clean_line.upper():
                 current_segment = 'code'
-                current_code_address = 0x0250
-                source_details.append(f"0250h | {line} | {'Correcto'}")
                 continue
-            elif '.DATA' in line.upper():
+            elif '.DATA' in clean_line.upper():
                 current_segment = 'data'
-                current_data_address = 0x0250
-                source_details.append(f"0250h | {line} | {'Correcto'}")
                 continue
-            elif '.STACK' in line.upper():
+            elif '.STACK' in clean_line.upper():
                 current_segment = 'stack'
-                current_stack_address = 0x0250
-                source_details.append(f"0250h | {line} | {'Correcto'}")
                 continue
 
-            # Process line based on segment
             if current_segment == 'code':
-                # Check if line is a jump instruction
-                parts = clean_line.split()
-                if parts and parts[0].upper() in jump_opcodes and len(parts) > 1:
-                    instruction = parts[0].upper()
-                    target = parts[1]
-
-                    # Store label address if it's a label definition
-                    if clean_line.endswith(':'):
-                        label = clean_line.rstrip(':').strip()
-                        self.dicc.tags_addresses[label] = f'{current_code_address:04X}h'
-                        source_details.append(
-                            f"{current_code_address:04X}h | {clean_line} | {'Correcto'}"
-                        )
-                    # Process jump instruction
-                    elif target in declared_labels:
-                        # Format: opcode target_address
-                        jump_code = f"{jump_opcodes[instruction]} {current_code_address + 2:04X}"
-                        source_details.append(
-                            f"{current_code_address:04X}h | {clean_line} | {jump_code}"
-                        )
-                        current_code_address += 2
-                    else:
-                        source_details.append(
-                            f"{current_code_address:04X}h | {clean_line} | {'Error: Etiqueta no definida'}"
-                        )
-                        current_code_address += 2
+                if clean_line.endswith(':'):
+                    label = clean_line.rstrip(':').strip()
+                    self.dicc.tags_addresses[label] = f'{temp_code_address:04X}h'
                 else:
-                    # Verificar la instrucción
+                    # Solo incrementar el contador para instrucciones válidas
                     verification_result = self.verify_single_instruction(clean_line)
+                    if verification_result == "Correcta" or verification_result.startswith(("74", "75", "7C", "7E", "7F", "7D", "77", "72", "E2", "E1", "E0")):
+                        temp_code_address += 2
 
-                    # Si es una etiqueta
-                    if clean_line.endswith(':'):
-                        label = clean_line.rstrip(':').strip()
-                        self.dicc.tags_addresses[label] = f'{current_code_address:04X}h'
-                        source_details.append(
-                            f"{current_code_address:04X}h | {clean_line} | {'Correcto'}"
-                        )
-                    else:
-                        # Para instrucciones regulares
-                        source_details.append(
-                            f"{current_code_address:04X}h | {clean_line} | {verification_result}"
-                        )
-                        # Solo incrementar el contador si la instrucción es correcta
-                        if verification_result == "Correcta":
-                            current_code_address += 2
+        # Segunda pasada: generar los detalles de la fuente
+        current_segment = None
+        for line in self.original_code:
+            clean_line = self.remove_comments(line)
+            if not clean_line:
+                continue
+
+            if '.CODE' in clean_line.upper():
+                current_segment = 'code'
+                source_details.append(f"0250h | {clean_line} | {'Correcto'}")
+                continue
+            elif '.DATA' in clean_line.upper():
+                current_segment = 'data'
+                source_details.append(f"0250h | {clean_line} | {'Correcto'}")
+                continue
+            elif '.STACK' in clean_line.upper():
+                current_segment = 'stack'
+                source_details.append(f"0250h | {clean_line} | {'Correcto'}")
+                continue
+
+            if current_segment == 'code':
+                if clean_line.endswith(':'):
+                    # Es una etiqueta
+                    label = clean_line.rstrip(':').strip()
+                    address = self.dicc.tags_addresses.get(label, '0000h')
+                    source_details.append(
+                        f"{address.rstrip('h')}h | {clean_line} | {'Correcto'}"
+                    )
+                else:
+                    # Es una instrucción
+                    verification_result = self.verify_single_instruction(clean_line)
+                    current_address = f"{current_code_address:04X}h"
+                    
+                    # Para instrucciones de salto, mostrar la dirección de destino
+                    parts = clean_line.split()
+                    if parts and parts[0].upper() in self.jump_opcodes and len(parts) > 1:
+                        target = parts[1]
+                        if target in self.dicc.tags_addresses:
+                            verification_result = f"{self.jump_opcodes[parts[0].upper()]} {self.dicc.tags_addresses[target]}"
+                    
+                    source_details.append(
+                        f"{current_address} | {clean_line} | {verification_result}"
+                    )
+                    
+                    if verification_result == "Correcta" or verification_result.startswith(("74", "75", "7C", "7E", "7F", "7D", "77", "72", "E2", "E1", "E0")):
+                        current_code_address += 2
 
             elif current_segment == 'data':
-                # El código para la sección de datos permanece igual
+                # Procesar líneas de datos
                 is_valid, message = self.process_data_line(clean_line)
-
                 if is_valid:
                     parts = clean_line.split()
                     if len(parts) >= 3:
                         var_name = parts[0]
                         directive = parts[1].upper()
-                        value = ' '.join(parts[2:])
-
-                        size_map = {'DB': 1, 'DW': 2, 'DD': 4}
-                        base_size = size_map.get(directive, 0)
-
-                        total_size = base_size
-                        if 'DUP' in value.upper():
-                            dup_parts = value.split('DUP')
-                            try:
-                                dup_count = int(dup_parts[0].strip())
-                                total_size = base_size * dup_count
-                            except ValueError:
-                                pass
-
                         source_details.append(
                             f"{current_data_address:04X}h | {clean_line} | {'Correcto'}"
                         )
-                        current_data_address += total_size
+                        
+                        # Actualizar la dirección según el tamaño de la variable
+                        if directive in ['DB', 'DW', 'DD']:
+                            size_map = {'DB': 1, 'DW': 2, 'DD': 4}
+                            current_data_address += size_map[directive]
                 else:
                     source_details.append(
                         f"{current_data_address:04X}h | {clean_line} | {'Error: ' + message}"
                     )
 
             elif current_segment == 'stack':
-                # El código para la sección de stack permanece igual
-                clean_line_lower = clean_line.lower().strip()
-                if clean_line_lower.startswith('dw'):
-                    dup_match = re.search(r'dw\s+(\d+)\s+dup\s*\(\s*0\s*\)', clean_line_lower)
+                # Procesar líneas de stack
+                if clean_line.lower().startswith('dw'):
+                    dup_match = re.search(r'dw\s+(\d+)\s+dup\s*\(\s*0\s*\)', clean_line.lower())
                     if dup_match:
                         multiplier = int(dup_match.group(1))
-                        increment = multiplier * 2
                         source_details.append(
                             f"{current_stack_address:04X}h | {clean_line} | {'Correcto'}"
                         )
-                        current_stack_address += increment
+                        current_stack_address += multiplier * 2
                     else:
                         source_details.append(
                             f"{current_stack_address:04X}h | {clean_line} | {'Error'}"
@@ -457,94 +512,54 @@ class AsmAnalyzer:
         return result
 
     def generate_symbol_table(self):
-        # Reset address counters to initial base address
-        base_address = 0x0250
-        current_address = base_address
+        # Reset symbol table
         self.symbol_table = {}
-        self.label_table = set()
 
-        # Reset dictionaries from Dictionary class
-        self.dicc.tags_addresses = {}
-        
-        # Create separate dictionaries for variables and labels
+        # Add constants to symbol table
+        for const_name, const_info in self.constants_dict.items():
+            if 'JZ' not in const_name.upper():
+                self.symbol_table[const_name] = {
+                    'símbolo': const_name,
+                    'tipo': 'Const',
+                    'valor': const_info['valor'],
+                    'tamaño': 0,
+                    'dirección': '----'
+                }
+
+        # Process variables and labels
         variables = {}
         labels = {}
 
-        # First pass: collect all addresses from source details
-        source_details = self.get_source_with_details()
-        address_map = {}
-
-        for detail in source_details:
-            # Each detail is in format "XXXXh | instruction | status"
-            parts = detail.split('|')
-            if len(parts) >= 2:
-                address = parts[0].strip().rstrip('h')  # Remove 'h' suffix
-                instruction = parts[1].strip()
-                # Store the address for this instruction
-                address_map[instruction] = int(address, 16)
-
-        # Now process sections using the collected addresses
-        current_section = None
-
-        for line in self.original_code:
-            clean_line = self.remove_comments(line)
-            if not clean_line:
-                continue
-
-            # Detect section changes
-            if '.CODE' in line.upper():
-                current_section = 'code'
-                continue
-            elif '.DATA' in line.upper():
-                current_section = 'data'
-                continue
-            elif '.STACK' in line.upper():
-                current_section = 'stack'
-                continue
-
-            # Get address from address_map
-            current_address = address_map.get(clean_line, current_address)
-
-            if current_section == 'code':
-                parts = clean_line.split()
-                if parts and parts[0].endswith(':'):
-                    label = parts[0].rstrip(':')
-                    # Validar longitud de etiqueta
-                    if not label[0].isdigit() and len(label) <= 10:
-                        self.dicc.tags_addresses[label] = f'{current_address:04X}h'
-                        labels[label] = {
-                            'símbolo': label,
-                            'tipo': 'etq',
-                            'valor': '',
-                            'tamaño': 0,
-                            'dirección': f'{current_address:04X}h'
-                        }
-
-        # Process variables from self.dicc.vars_addresses
+        # Process variables
         for var_name, var_info in self.dicc.vars_addresses.items():
-            # Extract address and type from dictionary
-            direccion = var_info.get('dirección', '0000h')
-            tipo = var_info.get('tipo', '')  # DB, DW, or DD
-            valor = var_info.get('valor', '')
-            tamaño = var_info.get('tamaño', 0)
+            if 'JZ' not in var_name.upper():
+                variables[var_name] = {
+                    'símbolo': var_name,
+                    'tipo': var_info.get('tipo', ''),
+                    'valor': var_info.get('valor', ''),
+                    'tamaño': var_info.get('tamaño', 0),
+                    'dirección': var_info.get('dirección', '0000h')
+                }
 
-            # Add to variables dictionary
-            variables[var_name] = {
-                'símbolo': var_name,
-                'tipo': tipo,
-                'valor': valor,
-                'tamaño': tamaño,
-                'dirección': direccion
-            }
+        # Process labels
+        for label, addr in self.dicc.tags_addresses.items():
+            if 'JZ' not in label.upper():
+                labels[label] = {
+                    'símbolo': label,
+                    'tipo': 'etq',
+                    'valor': '',
+                    'tamaño': 0,
+                    'dirección': addr
+                }
 
-        # Combine dictionaries with variables first, then labels
-        # Sort variables by address
-        sorted_variables = dict(sorted(variables.items(), key=lambda x: int(x[1]['dirección'].rstrip('h'), 16)))
-        sorted_labels = dict(sorted(labels.items(), key=lambda x: int(x[1]['dirección'].rstrip('h'), 16)))
-        
-        # Combine both dictionaries in the desired order
-        self.symbol_table = {**sorted_variables, **sorted_labels}
+        # Combine and sort dictionaries
+        sorted_constants = dict(sorted(self.symbol_table.items()))
+        sorted_variables = dict(sorted(variables.items(),
+                                       key=lambda x: int(x[1]['dirección'].rstrip('h'), 16)))
+        sorted_labels = dict(sorted(labels.items(),
+                                    key=lambda x: int(x[1]['dirección'].rstrip('h'), 16)))
 
+        self.symbol_table = {**sorted_constants, **sorted_variables, **sorted_labels}
         return self.symbol_table
 
     def generate_variables_dict(self):
@@ -775,36 +790,40 @@ class AsmAnalyzer:
 
             return f"Error: Invalid operand for {instruction}"
 
-        def encode_jump_instruction(instruction, target):
-            """Encode jump instructions"""
+        def encode_jump_instruction(self, instruction, target):
+            """
+            Encode jump instructions with correct relative addressing
+            """
             if target in self.dicc.tags_addresses:
-                # Obtener la dirección real de la etiqueta desde tags_addresses
-                target_addr_hex = self.dicc.tags_addresses[target].rstrip('h')
-                target_addr = int(target_addr_hex, 16)
-                current_addr = self.code_address_counter + 2  # +2 for instruction size
-
-                # Calculate relative offset
+                # Obtener la dirección de destino de la etiqueta
+                target_addr = int(self.dicc.tags_addresses[target].rstrip('h'), 16)
+                
+                # La dirección actual es la dirección de la siguiente instrucción
+                current_addr = self.code_address_counter + 2
+                
+                # Calcular el offset relativo
                 offset = target_addr - current_addr
-
-                # Check if jump is within range (-128 to 127 bytes)
+                
+                # Verificar que el offset esté en el rango válido (-128 a 127 bytes)
                 if -128 <= offset <= 127:
-                    # Convert offset to 8-bit two's complement
-                    offset_binary = format(offset & 0xFF, '08b')
-
-                    # Devolver el código de máquina con la dirección correcta de la tabla de símbolos
-                    machine_code = jump_opcodes[instruction] + offset_binary
-
-                    # Actualizar el machine_code_map con la dirección correcta
-                    self.machine_code_map[f"{instruction} {target}"] = {
-                        'address': f'{self.code_address_counter:04X}h',
-                        'machine_code_binary': machine_code,
-                        'machine_code_hex': target_addr_hex,
-                        'addressing_mode': 'DIRECT'
-                    }
-
+                    # Convertir el offset a complemento a dos de 8 bits si es negativo
+                    if offset < 0:
+                        offset = offset & 0xFF
+                    
+                    # Convertir a binario de 8 bits
+                    offset_binary = format(offset, '08b')
+                    
+                    # Obtener el opcode correspondiente
+                    opcode = self.jump_opcodes.get(instruction, '74')  # Default a JMP si no se encuentra
+                    
+                    # Combinar opcode y offset
+                    machine_code = f"{opcode}{offset_binary}"
+                    
                     return machine_code
-
-            return f"Error: Invalid jump target or offset out of range"
+                
+                return f"Error: Jump offset fuera de rango ({offset} bytes)"
+            
+            return f"Error: Etiqueta '{target}' no encontrada"
 
         def group_and_convert_to_hex(binary_str):
             """Convert binary string to grouped hex format"""
@@ -970,6 +989,10 @@ class AsmAnalyzer:
 
         mnemonic = parts[0].upper()
 
+        # Verificar inmediatamente si es JZ y marcar como error
+        if mnemonic == 'JZ' or (len(parts) > 1 and parts[1].upper() == 'JZ'):
+            return "Error: JZ no es una instrucción válida"
+
         # Handle labels
         if mnemonic.endswith(':'):
             if len(parts) > 1:
@@ -985,6 +1008,10 @@ class AsmAnalyzer:
             'JC': '72', 'LOOP': 'E2', 'LOOPE': 'E1',
             'LOOPNE': 'E0'
         }
+
+        # Agregar verificación específica para JZ
+        if mnemonic == 'JZ':
+            return "Error: JZ no es una instrucción válida en este contexto"
 
         # Special handling for jump instructions
         if mnemonic in jump_opcodes:
@@ -1102,3 +1129,20 @@ class AsmAnalyzer:
 
         # Actualizar etiqueta de página
         self.page_label.config(text=f"Página {current_page}/{total_pages}")
+
+    def get_constant_type(self, token):
+        # Primero verificar si es un número binario
+        if token.upper().endswith('B'):
+            try:
+                # Remover el sufijo 'B' y verificar si es un número binario válido
+                binary_str = token[:-1]
+                if all(bit in '01' for bit in binary_str):
+                    return 'Binario'
+            except:
+                pass
+                
+        # Continuar con el resto de las validaciones existentes
+        for pattern, const_type in self.constant_patterns.items():
+            if re.match(pattern, token):
+                return const_type
+        return None
