@@ -989,10 +989,6 @@ class AsmAnalyzer:
 
         mnemonic = parts[0].upper()
 
-        # Verificar inmediatamente si es JZ y marcar como error
-        if mnemonic == 'JZ' or (len(parts) > 1 and parts[1].upper() == 'JZ'):
-            return "Error: JZ no es una instrucción válida"
-
         # Handle labels
         if mnemonic.endswith(':'):
             if len(parts) > 1:
@@ -1009,69 +1005,88 @@ class AsmAnalyzer:
             'LOOPNE': 'E0'
         }
 
-        # Agregar verificación específica para JZ
-        if mnemonic == 'JZ':
-            return "Error: JZ no es una instrucción válida en este contexto"
-
-        # Special handling for jump instructions
+        # Special handling for jump instructions - preserve existing logic
         if mnemonic in jump_opcodes:
             if len(parts) == 1:
-                return "Falta operando para instrucción de salto"
+                return "Error: Falta operando para instrucción de salto"
             target = parts[1].upper()
-
-            # Check if target exists in tags_addresses
             if target in self.dicc.tags_addresses:
-                # Usar directamente la dirección de la tabla de símbolos
                 target_addr = self.dicc.tags_addresses[target]
-                # Return opcode + la dirección exacta de la tabla de símbolos
                 return f"{jump_opcodes[mnemonic]} {target_addr}"
             else:
-                return f"Etiqueta indefinida: {target}"
+                return f"Error: Etiqueta indefinida: {target}"
 
         # Check if it's a valid instruction
         if mnemonic not in self.instructions and not mnemonic.endswith(':'):
             return f"Error"
 
         # Handle instructions without operands (RET, PUSHF, CLC, etc.)
-        no_operand_instructions = {'RET', 'PUSHF', 'POPF', 'CLC', 'STC', 'CLI', 'STI', 'NOP'}
+        no_operand_instructions = {
+            'RET': 'C3', 'PUSHF': '9C', 'POPF': '9D',
+            'CLC': 'F8', 'STC': 'F9', 'CLI': 'FA',
+            'STI': 'FB', 'NOP': '90'
+        }
+        
         if mnemonic in no_operand_instructions:
             if len(parts) == 1:  # Should have no operands
-                return "Correcta"
+                return no_operand_instructions[mnemonic]
             else:
-                return f"{mnemonic} no debe tener operandos"
+                return f"Error: {mnemonic} no debe tener operandos"
 
-        # Check operand count and types for instructions that require operands
+        # Get operands
         operands = parts[1:]
 
-        # Define expected operands
-        expected_operands = {
-            'PUSH': 1,
-            'POP': 1,
-            'MOV': 2,
-            'CMP': 2,
-            'ADD': 2,
-            'SUB': 2
-        }
+        # Handle instructions with operands
+        if mnemonic == 'CMP' and len(operands) == 2:
+            result = self.verify_cmp_instruction(operands)
+            if result == "Correcto":
+                # Encode CMP instruction
+                try:
+                    machine_code = self.encode_cmp_instruction(operands[0], operands[1])
+                    if isinstance(machine_code, str) and len(machine_code) >= 16:
+                        # Convert binary to hex
+                        hex_code = format(int(machine_code[:8], 2), '02X')
+                        return hex_code
+                except:
+                    return "Error: Error en codificación"
+            return result
 
-        if mnemonic in expected_operands:
-            if len(operands) != expected_operands[mnemonic]:
-                return f"Número incorrecto de operandos para {mnemonic}"
-            if mnemonic == 'CMP':
-                return self.verify_cmp_instruction(operands)
-            # For two-operand instructions, validate operand types
-            if expected_operands[mnemonic] == 2:
-                op1, op2 = operands[0].upper(), operands[1].upper()
+        elif mnemonic == 'MOV' and len(operands) == 2:
+            op1, op2 = operands[0].upper(), operands[1].upper()
+            # Verify operands are valid
+            valid_op1 = (op1 in self.registers_16bit or op1 in self.registers_8bit or
+                        op1 in self.variables_dict)
+            valid_op2 = (op2 in self.registers_16bit or op2 in self.registers_8bit or
+                        op2 in self.variables_dict or self.is_valid_immediate(op2))
+            
+            if valid_op1 and valid_op2:
+                try:
+                    # Encode MOV instruction
+                    machine_code = self.encode_mov_instruction(op1, op2)
+                    if isinstance(machine_code, str) and len(machine_code) >= 16:
+                        # Convert binary to hex
+                        hex_code = format(int(machine_code[:8], 2), '02X')
+                        return hex_code
+                except:
+                    return "Error: Error en la codificación"
+            return "Error: Operandos inválidos"
 
-                # Check if operands are valid (register, variable, or immediate)
-                valid_op1 = (op1 in self.registers_16bit or op1 in self.registers_8bit or
-                             op1 in self.variables_dict or self.is_valid_immediate(op1))
-                valid_op2 = (op2 in self.registers_16bit or op2 in self.registers_8bit or
-                             op2 in self.variables_dict or self.is_valid_immediate(op2))
+        elif mnemonic in ['PUSH', 'POP'] and len(operands) == 1:
+            op = operands[0].upper()
+            if op in self.registers_16bit:
+                try:
+                    # Encode PUSH/POP instruction
+                    machine_code = self.encode_push_pop_instruction(mnemonic, op)
+                    if isinstance(machine_code, str) and len(machine_code) >= 8:
+                        # Convert binary to hex
+                        hex_code = format(int(machine_code, 2), '02X')
+                        return hex_code
+                except:
+                    return "Error: Error en la codificación"
+            return "Error: Operando inválido"
 
-                if not (valid_op1 and valid_op2):
-                    return "Operandos inválidos"
-
-        return "Correcta"
+        # For any other instruction that reaches here
+        return "Error: No es podible codificar"
 
     def is_valid_immediate(self, value):
         """Check if a value is a valid immediate operand"""
